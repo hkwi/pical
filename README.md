@@ -4,7 +4,7 @@ pical
 `pical` is a python icalendar library.
 
 Supported features:
-* parsing, building an ics file (icalendar/rfc5545,rfc2245)
+* parsing, building an ics file (icalendar/rfc5545,rfc2445)
 * querying for component with time-range (caldav/rfc4791)
 * values will be accessible as python native types
 

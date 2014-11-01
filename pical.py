@@ -114,12 +114,12 @@ def parse(stream, encoding="UTF-8"):
 	return comp.children
 
 class Component(object):
-	defaultType = {
+	defaultTypes = {
 		"CALSCALE": "TEXT",
 		"METHOD": "TEXT",
 		"PRODID": "TEXT",
 		"VERSION": "TEXT",
-		"ATTACH": "URI",
+		"ATTACH": "URI BINARY",
 		"CATEGORIES": "TEXT",
 		"CLASS": "TEXT",
 		"COMMENT": "TEXT",
@@ -132,9 +132,9 @@ class Component(object):
 		"STATUS": "TEXT",
 		"SUMMARY": "TEXT",
 		"COMPLETED": "DATE-TIME",
-		"DTEND": "DATE-TIME",
-		"DUE": "DATE-TIME",
-		"DTSTART": "DATE-TIME",
+		"DTEND": "DATE-TIME DATE",
+		"DUE": "DATE-TIME DATE",
+		"DTSTART": "DATE-TIME DATE",
 		"DURATION": "DURATION",
 		"FREEBUSY": "PERIOD",
 		"TRANSP": "TEXT",
@@ -146,17 +146,17 @@ class Component(object):
 		"ATTENDEE": "CAL-ADDRESS",
 		"CONTACT": "TEXT",
 		"ORGANIZER": "CAL-ADDRESS",
-		"RECURRENCE-ID": "DATE-TIME",
+		"RECURRENCE-ID": "DATE-TIME DATE",
 		"RELATED-TO": "TEXT",
 		"URL": "URI",
 		"UID": "TEXT",
-		"EXDATE": "DATE-TIME",
+		"EXDATE": "DATE-TIME DATE",
 		"EXRULE": "RECUR",
-		"RDATE": "DATE-TIME",
+		"RDATE": "DATE-TIME DATE PERIOD",
 		"RRULE": "RECUR",
 		"ACTION": "TEXT",
 		"REPEAT": "INTEGER",
-		"TRIGGER": "DURATION",
+		"TRIGGER": "DURATION DATE-TIME",
 		"CREATED": "DATE-TIME",
 		"DTSTAMP": "DATE-TIME",
 		"LAST-MODIFIED": "DATE-TIME",
@@ -272,7 +272,7 @@ class Component(object):
 					assert len(self.list(prop))<2, "component %s optional property %s must not occur more than once in %s" % (self.name, prop)
 		
 		for name,value,params in self.properties:
-			if name in self.defaultType:
+			if name in self.defaultTypes:
 				accept = False
 				for constraint,props in info.items():
 					if name in props.split():
@@ -370,25 +370,30 @@ class Component(object):
 			except:
 				continue
 	
-	def dtend(self):
-		return self.get("DURATION",
-			self.get("DTEND",
-			self.get("DUE")))
-	
 	def addProperty(self, name, value, params):
 		if self.name == " root":
 			raise ValueError("no component to add to")
 		
 		pdic = dict(params)
 		tzinfo = self.pickTzinfo(pdic.get("TZID",[None])[0])
-		vtype = _vtype.get(pdic.get("VALUE", [self.defaultType.get(name)])[0], Text)
-		delim = self.valueDelimiter.get(name)
-		if delim:
-			value = [vtype.parse(v, tzinfo) for v in value.split(delim)]
-		else:
-			value = vtype.parse(value, tzinfo)
+		acceptTypes = self.defaultTypes.get(name,"TEXT").split()
+		selectedType = pdic.get("VALUE", acceptTypes)[0]
+		assert selectedType in acceptTypes
+		typedValue = None
+		for stype in [selectedType]+acceptTypes:
+			vtype = _vtype.get(stype)
+			delim = self.valueDelimiter.get(name)
+			try:
+				if delim:
+					typedValue = [vtype.parse(v, tzinfo) for v in value.split(delim)]
+				else:
+					typedValue = vtype.parse(value, tzinfo)
+			except:
+				pass
 		
-		self.properties.append((name, value, params))
+		if typedValue is None:
+			raise ValueError("invalid VALUE for property %s" % name)
+		self.properties.append((name, typedValue, params))
 	
 	def serialize(self):
 		yield "BEGIN:%s" % self.name

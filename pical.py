@@ -866,8 +866,12 @@ class Calendar(Component):
 				for rmod in rmods:
 					for name,value,params in rmod.properties:
 						if name == "RECURRENCE-ID":
-							if dict(params).get("RANGE")=="THISANDFUTURE":
+							r = dict(params).get("RANGE",[None])[0]
+							if r=="THISANDFUTURE":
 								if dttest >= value:
+									return rmod
+							elif r=="THISANDPRIOR":
+								if dttest <= value:
 									return rmod
 							else:
 								if dttest == value:

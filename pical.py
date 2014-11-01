@@ -574,75 +574,111 @@ class Calendar(Component):
 		def expanded(dtstart,dtend,base,upon):
 			def value_param(name, value, params):
 				vname = None
-				tname = self.defaultType[name]
-				if tname != "TEXT":
+				tnames = self.defaultTypes[name].split()
+				if "TEXT" not in tnames:
 					klass = vtype_resolve(value)
-					if klass != _vtype[tname]:
+					
+					resolved = False
+					for idx,tname in enumerate(tnames):
+						if klass == _vtype[tname]:
+							resolved = True
+							if idx:
+								vname = tname
+					if not resolved:
 						for k,v in _vtype.items():
 							if v == klass:
 								vname = k
+								logging.getLogger("pical").error("property %s is using irregular value type %s" % (name,vname))
 				params = [param for param in params if param[0]!="VALUE"]
 				if vname:
 					params.append(("VALUE",[vname]))
 				return params
 			
+			override = {}
+			# RECURRENCE-ID
+			if base["DTSTART"] != dtstart:
+				override["RECURRENCE-ID"] = dtstart
+			# DTSTART
+			override["DTSTART"] = dtstart
+			if upon and upon.get("DTSTART"):
+				override["DTSTART"] = upon["DTSTART"] + (dtstart - upon["RECURRENCE-ID"])
+			# DTEND
+			if dtend is None:
+				t = base.get("DURATION",base.get("DTEND",base.get("DUE")))
+				if not isinstance(t,timedelta):
+					t = dtstart + (t - base["DTSTART"])
+				dtend = t
 			if upon:
-				exp = upon.clone()
-				if exp.dtend() is None and dtend:
-					if isinstance(dtend,timedelta):
-						name = "DURATION"
-					elif cname == "VTODO":
-						name = "DUE"
+				t = upon.get("DURATION",upon.get("DTEND",upon.get("DUE")))
+				if t:
+					if isinstance(t, timedelta):
+						dtend = t
+					elif upon.get("DTSTART"):
+						dtend = t + (dtstart - upon["RECURRENCE-ID"])
 					else:
-						name = "DTEND"
-					
-					exp.properties.append((name,dtend,value_param(name,dtend,[])))
-				
-				for name,value,params in base.properties:
-					if name in ("RRULE","EXRULE","RDATE","EXDATE"):
-						continue
-					if name in ("DURATION","DTEND","DUE") and exp.dtend():
-						continue
-					
-					if name in ("DUE","DTEND"):
-						exp.properties.append((name, exp["DTSTART"]+(base[name]-base["DTSTART"]), params))
-					elif name in self.props[cname]["once"] and len(exp.list(name))==0:
-						exp.properties.append((name,value,params))
-					elif name in self.props[cname]["key"] and len(exp.list(name))==0:
-						exp.properties.append((name,value,params))
-					else:
-						exp.properties.append((name,value,params))
-				
-				exp.properties.append(("RECURRENCE-ID",dtstart,value_param("RECURRENCE-ID", dtstart,[])))
-			elif dtstart == base["DTSTART"] and not expand:
+						logging.getLogger("pical").error("override failure: DTEND/DUE specified without DTSTART")
+			if dtend:
+				if isinstance(t, timedelta):
+					override["DURATION"] = dtend
+				elif cname == "VTODO":
+					override["DUE"] = dtend
+				else:
+					override["DTEND"] = dtend
+			
+			if dtstart == base["DTSTART"] and not expand:
 				exp = base
 			else:
 				exp = base.clone()
-				exp.properties = [("DTSTART", dtstart, value_param("DTSTART", dtstart, []))]
-				for name,value,params in base.properties:
-					if name in ("DTSTART", "RRULE", "RDATE", "EXDATE", "EXRULE"):
-						continue
-					elif name in ("DURATION","DTEND","DUE"):
-						if dtend is None:
-							if isinstance(value,timedelta):
-								dtend = value
-							else:
-								dtend = dtstart+(value-base["DTSTART"])
-						
-						if isinstance(dtend,timedelta):
-							name = "DURATION"
-						elif cname == "VTODO":
-							name = "DUE"
-						else:
-							name = "DTEND"
-						
-						exp.properties.append((name,dtend,value_param(name, dtend, [])))
-					else:
-						exp.properties.append((name,value,params))
+				# properties
+				def merge(a, b):
+					props = []
+					a = list(a)
+					b = list(b)
+					exclusives = [("DURATION","DTEND","DUE"),]
+					for name,value,params in a:
+						replaced = False
+						exclusive = False
+						for ex in exclusives:
+							if not replaced and name in ex:
+								exclusive = True
+								for prop in b:
+									if not replaced and prop[0] in ex:
+										b.remove(prop)
+										replaced = True
+										props.append(prop)
+										break
+						if not exclusive:
+							for prop in b:
+								if not replaced and prop[0]==name:
+									b.remove(prop)
+									replaced = True
+									props.append(prop)
+									break
+						if not replaced:
+							props.append((name,value,params))
+					for prop in b:
+						props.append(prop)
+					return props
 				
-				exp.properties.append(
-					("RECURRENCE-ID", dtstart, value_param("RECURRENCE-ID", dtstart, []))
-					)
+				props = list(base.properties)
+				if upon:
+					props = merge(props, upon.properties)
+				props = merge(props, [(name,value,value_param(name,value,[])) for name,value in override.items()])
+				exp.properties = [p for p in props if p[0] not in ("RRULE","EXRULE","RDATE","EXDATE")]
+				
+				# subcomponent(VALARM)
+				children = [c.clone() for c in base.children]
+				if upon and upon.children:
+					children += [c.clone() for c in upon.children]
+				for c in children:
+					for idx,prop in enumerate(c.properties):
+						if prop[0]=="TRIGGER" and isinstance(prop[1],datetime):
+							delta = dtstart - base["DTSTART"]
+							if upon:
+								delta += (upon["DTSTART"] - upon["RECURRENCE-ID"])
+							c.properties[idx] = (prop[0], prop[1]+delta, params)
+				exp.children = children
+			
 			return exp
 		
 		found = set()
@@ -653,46 +689,51 @@ class Calendar(Component):
 			
 			uids = set([c.get("UID") for c in self.children if c.name==cname])
 			if end is None:
-				for c in self.children:
-					if cname != c.name:
+				for base in self.children:
+					if cname != base.name:
 						continue
-					ulim_rrule = sorted([sorted(recurr.items()) for recurr in c.list("RRULE")
+					ulim_rrule = sorted([sorted(recurr.items()) for recurr in base.list("RRULE")
 						if recurr.get("UNTIL") is None and recurr.get("COUNT") is None])
-					ulim_erule = sorted([sorted(recurr.items()) for recurr in c.list("EXRULE")
+					ulim_erule = sorted([sorted(recurr.items()) for recurr in base.list("EXRULE")
 						if recurr.get("UNTIL") is None and recurr.get("COUNT") is None])
 					
 					if ulim_rrule and ulim_rrule!=ulim_erule:
-						uid = c.get("UID")
+						uid = base.get("UID")
 						uids.remove(uid)
-						found.add(c)
-						for c in self.children:
-							if c.get("RECURRENCE-ID") is None or cname!=c.name or c["UID"]!=uid:
+						found.add(base)
+						for upon in self.children:
+							if upon.get("RECURRENCE-ID") is None or cname!=upon.name or upon["UID"]!=uid:
 								continue
 							
-							exp = None
-							if c.dtend() is None:
+							future = False
+							for name,value,params in rmod.properties:
+								if name == "RECURRENCE-ID" and dict(params).get("RANGE")=="THISANDFUTURE":
+									found.add(upon)
+									future = True
+							if future:
+								continue
+							
+							expansion_hit = False
+							if comp_dtend(upon) is None:
 								wait1 = False
-								for dtstart,dtend,base,upon in self.scan_uid(cname, uid, floating_tz, end):
-									if upon == c:
+								for dtstart,dtend,base2,upon2 in self.scan_uid(cname, uid, floating_tz, end):
+									if upon == upon2:
 										exp = expanded(dtstart,dtend,base,upon)
+										expansion_hit = True
+										if overlaps[cname](exp["DTSTART"], comp_dtend(exp), exp):
+											found.add(c)
 									if wait1:
 										break
-									if dtstart > c["DTSTART"]:
+									if dtstart > upon["DTSTART"]:
 										wait1 = True
-							else:
-								exp = c
-							
-							if exp is None:
-								logging.getLogger("pical").error("failed to resolve dtend(or duration) of a component with RECURRENCE-ID, ignoring")
-								continue
-							
-							if overlaps[cname](exp["DTSTART"], exp.dtend(), exp):
-								found.add(c)
+							if not expansion_hit:
+								if overlaps[cname](upon["DTSTART"], comp_dtend(upon), upon):
+									found.add(c)
 			for uid in uids:
 				for dtstart,dtend,base,upon in self.scan_uid(cname, uid, floating_tz, end):
 					exp = expanded(dtstart,dtend,base,upon)
 					dtstart = exp.get("DTSTART")
-					dtend = exp.dtend()
+					dtend = comp_dtend(exp)
 					
 					if (component is None or component == "VALARM") and cname in ("VEVENT","VTODO"):
 						children = base.children
@@ -1693,6 +1734,13 @@ class UtcOffset(tzinfo):
 		return fmt % (offset.seconds//3600, (offset.seconds%3600)//60)
 
 utc = UtcOffset.parse("+0000", None)
+
+def comp_dtend(obj):
+	for k in ("DURATION","DTEND","DUE"):
+		v = obj.get(k)
+		if v is None:
+			continue
+		return v
 
 class vdatetime_cmp(object):
 	def __init__(self, floating_tz = None):

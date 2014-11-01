@@ -404,9 +404,9 @@ class Component(object):
 					base += "Z"
 				elif dict(params).get("TZID") is None:
 					if isinstance(value.tzinfo, Timezone):
-						params.append(("TZID", value["TZID"]))
+						params.append(("TZID", [value.tzinfo["TZID"]]))
 					else:
-						params.append(("TZID", "/"+str(value)))
+						params.append(("TZID", ["/"+str(value)]))
 			return base,params
 		
 		for name,value,params in self.properties:

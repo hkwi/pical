@@ -1,4 +1,5 @@
 from datetime import datetime, date, time, timedelta, tzinfo
+import operator
 import re
 import logging
 digits = re.compile("^\d+$")
@@ -749,7 +750,7 @@ class Calendar(Component):
 					rmods.append(c)
 		
 		if not rbases: # already expanded
-			for r in sorted(rmods, cmp=self.sorter[component_name]):
+			for r in sorted(rmods, key=operator.itemgetter("DTSTART")):
 				yield r.get("DTSTART"), None, r, None
 		
 		# yields (onset_dtstart, duration_or_dtend?, generator_component, modifier_component?)

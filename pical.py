@@ -410,15 +410,24 @@ class Component(object):
 			return base,params
 		
 		for name,value,params in self.properties:
-			klass = vtype_resolve(value)
-			if klass:
-				vstr = klass.build(value)
-				if klass in (DateTime, Time):
-					vstr,params = tzhook(vstr,value,params)
-			else:
-				vstr = repr(value)
+			vparams = list(params)
+			def build_value(value, vparams):
+				klass = vtype_resolve(value)
+				if klass:
+					vstr = klass.build(value)
+					if klass in (DateTime, Time):
+						vstr,vparams = tzhook(vstr,value,vparams)
+				else:
+					vstr = repr(value)
+				return vstr
 			
-			yield "%s%s:%s" % (name, "".join([";%s=%s" % (k,",".join(v)) for k,v in params]), vstr)
+			delim = self.valueDelimiter.get(name)
+			if delim:
+				vstr = delim.join([build_value(v,vparams) for v in value])
+			else:
+				vstr = build_value(value,vparams)
+			
+			yield "%s%s:%s" % (name, "".join([";%s=%s" % (k,",".join(v)) for k,v in vparams]), vstr)
 		for c in self.children:
 			for s in c.serialize():
 				yield s

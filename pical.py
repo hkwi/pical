@@ -2,7 +2,8 @@ from datetime import datetime, date, time, timedelta, tzinfo
 import operator
 import re
 import logging
-digits = re.compile("^\d+$")
+digits = re.compile(r"^\d+$")
+control = re.compile(r"[\x00-\x1F\x7F]")
 
 class uc(str):
 	# case insensitive string (upper cased)
@@ -65,20 +66,22 @@ def parse(stream, encoding="UTF-8"):
 		line = line[len(m.group(0)):]
 		params = []
 		while nx==";":
-			m = re.match(r'^([a-zA-Z0-9-]+)=([^\x00-\x1F\x7F"]*?|"[^\x00-\x1F\x7F";:,]*?")([,:;])', line)
+			m = re.match(r'^([a-zA-Z0-9-]+)=([^\x00-\x1F\x7F";:,]*?|"[^\x00-\x1F\x7F"]*?")([,:;])', line)
 			if not m:
 				logger.error("contentline param error L%d" % lineno)
 			pname,pval,nx = m.groups()
+			pname = uc(pname)
 			line = line[len(m.group(0)):]
 			vals=[pval]
 			while nx == ",":
-				m = re.match(r'^([^\x00-\x1F\x7F"]*?|"[^\x00-\x1F\x7F";:,]*?")([,:;])', line)
+				m = re.match(r'^([^\x00-\x1F\x7F";:,]*?|"[^\x00-\x1F\x7F"]*?")([,:;])', line)
 				if not m:
 					logger.error("contentline multi param error L%d" % lineno)
 				pval,nx = m.groups()
 				line = line[len(m.group(0)):]
 				vals.append(pval)
-			params.append((uc(pname), vals))
+			
+			params.append((uc(pname), Parameter.raw2native(pname, vals)))
 		name = uc(name)
 		value = line
 		
@@ -112,6 +115,74 @@ def parse(stream, encoding="UTF-8"):
 	if comp.name != " root":
 		raise ValueError("missing END L%d" % lineno)
 	return comp.children
+
+
+class Parameter(object):
+	paramQuote = "ALTREP DELEGATED-FROM DELEGATED-TO DIR MEMBER SENT-BY"
+	
+	paramOptions = {
+		"CUTYPE": "INDIVIDUAL GROUP RESOURCE ROOM UNKNOWN X-",
+		"ENCODING": "8BIT BASE64",
+		"FBTYPE": "FREE BUSY BUSY-UNAVAILABLE BUSY-TENTATIVE X-",
+		"PARTSTAT": "NEEDS-ACTION ACCEPTED DECLINED TENTATIVE DELEGATED COMPLETED IN-PROGRESS X-",
+		"RANGE": "THISANDFUTURE THISANDPRIOR",
+		"RELATED": "START END",
+		"RELTYPE": "PARENT CHILD SIBLING X-",
+		"ROLE": "CHAIR REQ-PARTICIPANT OPT-PARTICIPANT NON-PARTICIPANT X-",
+		"RSVP": "TRUE FALSE",
+		"VALUE": "BINARY BOOLEAN CAL-ADDRESS DATE DATE-TIME DURATION "
+			"FLOAT INTEGER PERIOD RECUR TEXT TIME URI UTC-OFFSET X-",
+	}
+	
+	@classmethod
+	def raw2native(cls, name, values):
+		pname = uc(name)
+		options = cls.paramOptions.get(pname,"").split()
+		
+		pvalues = []
+		for value in values:
+			if options:
+				if value not in options and "X-" not in options:
+					logging.getLogger("pical").warn("param %s have non-standard value" % pname)
+			elif (value[0] != '"' or value[-1] != '"') and pname in cls.paramQuote.split():
+				logging.getLogger("pical").warn("parameter %s was not DQUOTE" % pname)
+			
+			if value[0] == '"':
+				pvalues.append(value[1:-1])
+			else:
+				pvalues.append(value)
+		return pvalues
+	
+	@classmethod
+	def native2raw(cls, name, values):
+		pname = uc(name)
+		pvalues = []
+		for value in values:
+			if control.search(value) is not None:
+				logging.getLogger("pical").error("parameter %s has CONTROL" % pname) # python2 may hit
+			
+			options = cls.paramOptions.get(pname,"").split()
+			if options:
+				if value not in options and "X-" not in options:
+					logging.getLogger("pical").warn("param %s have non-standard value" % pname)
+			
+			dquote = False
+			if value[0]=='"' and value[-1]=='"':
+				dquote = False # already encoded
+			elif '"' in value:
+				logging.getLogger("pical").error("parameter %s has DQUOTE" % pname) # python2 may hit
+			elif pname in cls.paramQuote.split():
+				dquote = True
+			else:
+				for c in ";:,":
+					if c in value:
+						dquote = True
+			
+			if dquote:
+				pvalues.append('"%s"' % value)
+			else:
+				pvalues.append(value)
+		return pvalues
 
 class Component(object):
 	valueTypes = {
@@ -280,6 +351,16 @@ class Component(object):
 				if not accept:
 					raise ValueError("property %s is not defined in component %s" % (name, self.name))
 		
+		if self.name == "VTIMEZONE":
+			assert len([c for c in self.children if c.name in "DAYLIGHT STANDARD".split()]) > 0, "VTIMEZONE must include at least one definition"
+		if self.name in "DAYLIGHT STANDARD".split():
+			if self.list("RRULE"):
+				assert self.get("DTSTART") and self.get("TZOFFSETFROM"), "DTSTART and TZOFFSETFROM must be used when generating the onset DATE-TIME values"
+			for rdates in self.list("RDATE"):
+				for rdate in rdates:
+					if isinstance(rdate,datetime):
+						assert rdate.tzinfo is None, "RDATE must be specified as a date with local time value"
+		
 		if self.name in "VEVENT VTODO VJOURNAL DAYLIGHT STANDARD".split():
 			for name in ("RRULE","EXRULE"):
 				recurrs = self.list(name)
@@ -378,7 +459,9 @@ class Component(object):
 		tzinfo = self.pickTzinfo(pdic.get("TZID",[None])[0])
 		acceptTypes = self.valueTypes.get(name,"TEXT").split()
 		selectedType = pdic.get("VALUE", acceptTypes)[0]
-		assert selectedType in acceptTypes
+		if selectedType not in acceptTypes:
+			logging.getLogger("pical").warn("%s not a standard VALUE parameter value" % selectedType)
+			selectedType = Text
 		typedValue = None
 		for stype in [selectedType]+acceptTypes:
 			vtype = _vtype.get(stype)
@@ -393,6 +476,7 @@ class Component(object):
 		
 		if typedValue is None:
 			raise ValueError("invalid VALUE for property %s" % name)
+		
 		self.properties.append((name, typedValue, params))
 	
 	def serialize(self):
@@ -427,7 +511,7 @@ class Component(object):
 			else:
 				vstr = build_value(value,vparams)
 			
-			yield "%s%s:%s" % (name, "".join([";%s=%s" % (k,",".join(v)) for k,v in vparams]), vstr)
+			yield "%s%s:%s" % (name, "".join([";%s=%s" % (k,",".join(Parameter.native2raw(k,v))) for k,v in vparams]), vstr)
 		for c in self.children:
 			for s in c.serialize():
 				yield s

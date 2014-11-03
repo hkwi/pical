@@ -114,7 +114,7 @@ def parse(stream, encoding="UTF-8"):
 	return comp.children
 
 class Component(object):
-	defaultTypes = {
+	valueTypes = {
 		"CALSCALE": "TEXT",
 		"METHOD": "TEXT",
 		"PRODID": "TEXT",
@@ -272,7 +272,7 @@ class Component(object):
 					assert len(self.list(prop))<2, "component %s optional property %s must not occur more than once in %s" % (self.name, prop)
 		
 		for name,value,params in self.properties:
-			if name in self.defaultTypes:
+			if name in self.valueTypes:
 				accept = False
 				for constraint,props in info.items():
 					if name in props.split():
@@ -376,7 +376,7 @@ class Component(object):
 		
 		pdic = dict(params)
 		tzinfo = self.pickTzinfo(pdic.get("TZID",[None])[0])
-		acceptTypes = self.defaultTypes.get(name,"TEXT").split()
+		acceptTypes = self.valueTypes.get(name,"TEXT").split()
 		selectedType = pdic.get("VALUE", acceptTypes)[0]
 		assert selectedType in acceptTypes
 		typedValue = None
@@ -583,7 +583,7 @@ class Calendar(Component):
 		def expanded(dtstart,dtend,base,upon):
 			def value_param(name, value, params):
 				vname = None
-				tnames = self.defaultTypes[name].split()
+				tnames = self.valueTypes[name].split()
 				if "TEXT" not in tnames:
 					klass = vtype_resolve(value)
 					

@@ -1291,11 +1291,11 @@ class Recur(object):
 		items = []
 		for k,v in [kv.split("=") for kv in value.split(";")]:
 			k = uc(k)
-			if k == "freq":
+			if k == "FREQ":
 				if v not in cls.freq:
 					raise ValueError("FREQ parameter value error")
 				items.append((k,v))
-			elif k in ("count","interval"):
+			elif k in ("COUNT","INTERVAL"):
 				items.append((k,int(v)))
 			elif k in cls.ranges:
 				items.append((k,map(digits(*cls.ranges[k]), v.split(","))))
@@ -1727,7 +1727,7 @@ class Recur(object):
 						cur = (cur + timedelta(400)).replace(month=cur.month, day=cur.day)
 				else:
 					break
-			
+				
 				context["setno"] += 1
 				yield cur
 		

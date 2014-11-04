@@ -1,4 +1,8 @@
 from datetime import datetime
+try:
+	from StringIO import StringIO
+except:
+	from io import StringIO
 import pical
 import glob
 import os.path
@@ -7,7 +11,9 @@ logging.basicConfig()
 
 def test_parse():
 	for f in glob.glob("%s/*.ics" % os.path.dirname(__file__)):
-		pical.parse(open(f,"rb"))
+		for c in pical.parse(open(f,"rb")):
+			fp = StringIO("\r\n".join(list(c.serialize())))
+			pical.parse(fp)
 
 def test_range():
 	cal = pical.parse(open("%s/google_calendar_ex1.ics" % os.path.dirname(__file__),"rb"))[0]

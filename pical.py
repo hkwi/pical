@@ -1,4 +1,6 @@
 from datetime import datetime, date, time, timedelta, tzinfo
+from functools import cmp_to_key
+import base64
 import operator
 import re
 import logging
@@ -40,7 +42,7 @@ def unfold(stream):
 			nx = nx[:-1]
 		
 		nxno += 1
-		if len(nx) > 0 and nx[0] in (" ", "\t", b" ", b"\t"):
+		if len(nx) > 0 and nx[0:1] in (" ", "\t", b" ", b"\t"):
 			if buf is None:
 				buf = nx
 			else:
@@ -59,6 +61,8 @@ def parse(stream, encoding="UTF-8"):
 	comp = Component(" root", None)
 	stack = [comp]
 	for line,lineno in unfold(stream):
+		if isinstance(line, bytes):
+			line = line.decode(encoding)
 		m = re.match(r"^([a-zA-Z0-9-]+)([;:])", line)
 		if not m:
 			logger.error("contentline name error L%d" % lineno)
@@ -870,7 +874,7 @@ class Calendar(Component):
 				continue
 			uids.add(c["UID"])
 		
-		merger = Merger(cmp=lambda x,y:vdatetime_cmp(floating_tz)(x[0],y[0]))
+		merger = Merger(key=cmp_to_key(vdatetime_cmp(floating_tz)))
 		for uid in uids:
 			merger.add(self.scan_uid(component_name, uid, end=None))
 		
@@ -893,11 +897,11 @@ class Calendar(Component):
 				yield r.get("DTSTART"), None, r, None
 		
 		# yields (onset_dtstart, duration_or_dtend?, generator_component, modifier_component?)
-		combined = Merger(cmp=lambda x,y:vdatetime_cmp(floating_tz)(x[0],y[0]))
+		combined = Merger(key=cmp_to_key(vdatetime_cmp(floating_tz)))
 		for rbase in rbases:
 			# yields (onset_dtstart, duration_or_dtend?)
-			setter = Merger(cmp=lambda x,y:vdatetime_cmp(floating_tz)(x[0],y[0]))
-			unsetter = Merger(cmp=lambda x,y:vdatetime_cmp(floating_tz)(x[0],y[0]))
+			setter = Merger(key=cmp_to_key(vdatetime_cmp(floating_tz)))
+			unsetter = Merger(key=cmp_to_key(vdatetime_cmp(floating_tz)))
 			
 			for key,m in (("RDATE", setter), ("EXDATE", unsetter)):
 				for values in rbase.list(key):
@@ -931,7 +935,7 @@ class Calendar(Component):
 			def filtered(setter, unsetter):
 				unset = None
 				try:
-					(udset,_),_ = unsetter.next()
+					(udset,_),_ = next(unsetter)
 				except StopIteration:
 					unset = None
 				
@@ -939,7 +943,7 @@ class Calendar(Component):
 					if unset is not None:
 						while unset < dtstart:
 							try:
-								(unset,_),_ = unsetter.next()
+								(unset,_),_ = next(unsetter)
 							except StopIteration:
 								unset = None
 								break
@@ -1370,7 +1374,7 @@ class Recur(object):
 	
 		def count(src, part):
 			for _ in range(part):
-				yield src.next()
+				yield next(src)
 	
 		def bysetpos(src, part):
 			setpos = context["setno"]
@@ -1399,7 +1403,7 @@ class Recur(object):
 			freq = uc(self.get("FREQ", ""))
 			if freq == "SECONDLY":
 				while True:
-					value = src.next()
+					value = next(src)
 					if value.second in part:
 						yield value
 					# XXX: add leap time support
@@ -1410,7 +1414,7 @@ class Recur(object):
 					nonleap.add(59)
 				
 				part = sorted(nonleap)
-				value = src.next()
+				value = next(src)
 				for p in part:
 					if p >= value.second:
 						yield value.replace(second=p)
@@ -1427,7 +1431,7 @@ class Recur(object):
 						yield value
 			else:
 				part = sorted(set([p for p in part if 0<=p<=59]))
-				value = src.next()
+				value = next(src)
 				for p in part:
 					if p >= value.minute:
 						yield value.replace(minute=p)
@@ -1444,7 +1448,7 @@ class Recur(object):
 						yield value
 			else:
 				part = sorted(set([p for p in part if 0<=p<=23]))
-				value = src.next()
+				value = next(src)
 				for p in part:
 					if p >= value.hour:
 						yield value.replace(hour=p)
@@ -1506,7 +1510,7 @@ class Recur(object):
 				wkst = weeks.index(self.get("WKST", "MO"))
 				part = sorted([(weeks.index(p)-wkst)%7 for p in part if len(p)==2])
 				
-				value = src.next()
+				value = next(src)
 				wd = (value.weekday() - wkst) % 7
 				for p in part:
 					if p >= wd:
@@ -1525,7 +1529,7 @@ class Recur(object):
 							yield value
 				else:
 					# special expand
-					value = src.next()
+					value = next(src)
 					for v in part_expand(value, False):
 						if v >= value:
 							yield v
@@ -1546,7 +1550,7 @@ class Recur(object):
 							yield value
 				else:
 					# special expand
-					value = src.next()
+					value = next(src)
 					for v in part_expand(value, in_year):
 						if v >= value:
 							yield v
@@ -1575,7 +1579,7 @@ class Recur(object):
 			if freq == "WEEKLY":
 				pass # invalid by specification
 			elif freq in ("MONTHLY", "YEARLY"):
-				value = src.next()
+				value = next(src)
 				for p in resolve(value):
 					if p >= value.day:
 						yield value.replace(day=p)
@@ -1607,7 +1611,7 @@ class Recur(object):
 				pass
 			elif freq == "YEARLY":
 				# expand
-				value = src.next()
+				value = next(src)
 				for p in tm_resolve(value):
 					if p>=value:
 						yield value
@@ -1626,7 +1630,7 @@ class Recur(object):
 			if freq != "YEARLY":
 				return
 			wkst = weeks.index(self.get("WKST", "MO"))
-			part = sorted(part, cmp=lambda x,y: (x-wkst)%7 - (y-wkst)%7)
+			part = sorted(part, key=lambda x:(x-wkst)%7)
 		
 			def expand(value):
 				wday = value.weekday()
@@ -1658,7 +1662,7 @@ class Recur(object):
 						scans = [head + p*timedelta(weeks=1) for p in part if p > 0]
 				return [u for u in scans if u.year==value.year]
 		
-			value = src.next()
+			value = next(src)
 			for v in expand(value):
 				if v >= value:
 					yield v
@@ -1674,7 +1678,7 @@ class Recur(object):
 				def expand(value):
 					return [value.replace(month=p) for p in part]
 			
-				value = src.next()
+				value = next(src)
 				for v in expand(value):
 					if v >= value:
 						yield v
@@ -1725,7 +1729,14 @@ class Recur(object):
 			if value:
 				src = locals()[part.lower()](src, value)
 		
-		for value in src:
+		def guard(src):
+			while True:
+				try:
+					yield next(src)
+				except OverflowError as e:
+					break
+		
+		for value in guard(src):
 			yield value
 
 @vtype("TEXT")
@@ -1754,7 +1765,7 @@ class Time(time):
 		m = cls.pattern.match(value)
 		if not m:
 			raise ValueError("TIME format error")
-		args = map(int, m.groups()[:3])
+		args = list(map(int, m.groups()[:3]))
 		if not 0 <= args[0] <= 23:
 			raise ValueError("TIME hour out of range")
 		if not 0 <= args[1] <= 59:
@@ -1846,6 +1857,14 @@ class vdatetime_cmp(object):
 		self.ftz = floating_tz
 	
 	def __call__(self, a, b):
+		def cmp(a,b): # for python3
+			if a < b:
+				return -1
+			elif a==b:
+				return 0
+			else:
+				return 1
+		
 		if isinstance(a, datetime):
 			if isinstance(b, datetime):
 				if a.tzinfo:
@@ -1865,27 +1884,24 @@ class vdatetime_cmp(object):
 		return cmp(a, b)
 
 class Merger(object):
-	def __init__(self, key=None, cmp=None):
+	def __init__(self, key=None):
 		self.generators = []
 		self.key = key
-		self.cmp = cmp
 	
 	def add(self, generator, *data):
 		self.generators.append((generator, data))
 	
 	def __call__(self):
-		cur = [[g.next(), g, d] for g,d in self.generators]
+		cur = [[next(g), g, d] for g,d in self.generators]
 		while len(cur):
-			if self.cmp:
-				cur = sorted(cur, cmp=lambda x,y:self.cmp(x[0],y[0]))
-			elif self.key:
+			if self.key:
 				cur = sorted(cur, key=lambda x:self.key(x[0]))
 			else:
 				cur = sorted(cur, key=lambda x:x[0])
 			v,g,d = cur[0]
 			yield tuple([v] + list(d))
 			try:
-				cur[0][0] = g.next()
+				cur[0][0] = next(g)
 			except StopIteration:
 				cur = cur[1:]
 

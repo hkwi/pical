@@ -104,7 +104,7 @@ def parse(stream, encoding="UTF-8"):
 		elif name == "END":
 			if comp.name == value:
 				try:
-					comp.verify()
+					comp.validate()
 				except Exception as e:
 					logger.error("%s L%d" % (e,lineno))
 				comp = stack.pop()
@@ -126,9 +126,9 @@ class Parameter(object):
 	
 	paramOptions = {
 		"CUTYPE": "INDIVIDUAL GROUP RESOURCE ROOM UNKNOWN X-",
-		"ENCODING": "8BIT BASE64",
+		"ENCODING": "8BIT BASE64 X-",
 		"FBTYPE": "FREE BUSY BUSY-UNAVAILABLE BUSY-TENTATIVE X-",
-		"PARTSTAT": "NEEDS-ACTION ACCEPTED DECLINED TENTATIVE DELEGATED COMPLETED IN-PROGRESS X-",
+		"PARTSTAT": "NEEDS-ACTION ACCEPTED DECLINED TENTATIVE DELEGATED COMPLETED IN-PROCESS X-",
 		"RANGE": "THISANDFUTURE THISANDPRIOR",
 		"RELATED": "START END",
 		"RELTYPE": "PARENT CHILD SIBLING X-",
@@ -240,7 +240,9 @@ class Component(object):
 	}
 
 	valueDelimiter = {
+		"CATEGORIES": ",",
 		"GEO": ";",
+		"RESOURCES": ",",
 		"FREEBUSY": ",",
 		"EXDATE": ",",
 		"RDATE": ",",
@@ -253,43 +255,43 @@ class Component(object):
 			once = "CALSCALE METHOD",
 			),
 		VEVENT = dict(
-			key = "DTSTAMP UID",
+			key5545 = "DTSTAMP UID",
 			once = "DTSTART"
 				" CLASS CREATED DESCRIPTION GEO"
 				" LAST-MODIFIED LOCATION ORGANIZER PRIORITY"
 				" SEQUENCE STATUS SUMMARY TRANSP"
-				" URL RECURRENCE-ID RESOURCES"
+				" URL RECURRENCE-ID"
 				" DTEND DURATION",
-			many = "RRULE"
+			many = "RRULE EXRULE"
 				" ATTACH ATTENDEE CATEGORIES COMMENT"
 				" CONTACT EXDATE REQUEST-STATUS RELATED-TO"
-				" RDATE",
+				" RESOURCES RDATE",
 			),
 		VTODO = dict(
-			key = "DTSTAMP UID",
+			key5545 = "DTSTAMP UID",
 			once = "CLASS COMPLETED CREATED DESCRIPTION"
 				" DTSTART GEO LAST-MODIFIED LOCATION ORGANIZER"
 				" PERCENT-COMPLETE PRIORITY RECURRENCE-ID SEQUENCE STATUS"
 				" SUMMARY URL"
 				" DUE DURATION",
-			many = "RRULE"
+			many = "RRULE EXRULE"
 				" ATTACH ATTENDEE CATEGORIES COMMENT CONTACT"
 				" EXDATE REQUEST-STATUS RELATED-TO RESOURCES"
 				" RDATE",
 			),
 		VJOURNAL =dict(
-			key = "DTSTAMP UID",
+			key5545 = "DTSTAMP UID",
 			once = "CLASS CREATED DTSTART"
 				" LAST-MODIFIED ORGANIZER RECURRENCE-ID SEQUENCE"
 				" STATUS SUMMARY URL",
-			many = "RRULE"
+			many = "RRULE EXRULE"
 				" ATTACH ATTENDEE CATEGORIES COMMENT"
 				" CONTACT DESCRIPTION EXDATE RELATED-TO RDATE"
 				" REQUEST-STATUS",
 			),
 		VFREEBUSY = dict(
-			key = "DTSTAMP UID",
-			once = "CONTACT DTSTART DTEND"
+			key5545 = "DTSTAMP UID",
+			once = "CONTACT DTSTART DTEND DURATION"
 				" ORGANIZER URL",
 			many = "ATTENDEE COMMENT FREEBUSY REQUEST-STATUS",
 			),
@@ -298,12 +300,12 @@ class Component(object):
 			once = "LAST-MODIFIED TZURL",
 			),
 		DAYLIGHT = dict(
-			once = "DTSTART TZOFFSETTO TZOFFSETFROM",
+			key = "DTSTART TZOFFSETTO TZOFFSETFROM",
 			many = "RRULE"
 				" COMMENT RDATE TZNAME",
 			),
 		STANDARD = dict(
-			once = "DTSTART TZOFFSETTO TZOFFSETFROM",
+			key = "DTSTART TZOFFSETTO TZOFFSETFROM",
 			many = "RRULE"
 				" COMMENT RDATE TZNAME",
 			),
@@ -337,14 +339,15 @@ class Component(object):
 	def list(self, name):
 		return [prop[1] for prop in self.properties if prop[0] == name]
 	
-	def verify(self):
+	def validate(self):
 		info = self.props.get(self.name, {})
-		for constraint,props in info.items():
-			for prop in props.split():
-				if constraint == "key":
-					assert len(self.list(prop))==1, "component %s requires property %s" % (self.name, prop)
-				elif constraint == "once":
-					assert len(self.list(prop))<2, "component %s optional property %s must not occur more than once in %s" % (self.name, prop)
+		for prop in info.get("key","").split():
+			assert len(self.list(prop))==1, "component %s requires property %s" % (self.name, prop)
+		for prop in info.get("key5545","").split():
+			if len(self.list(prop))!=1:
+				logging.getLogger("pical").warn("component %s requires property %s in rfc5545" % (self.name, prop))
+		for prop in info.get("once","").split():
+			assert len(self.list(prop))<2, "component %s property %s must not occur more than once in %s" % (self.name, prop)
 		
 		for name,value,params in self.properties:
 			if name in self.valueTypes:
@@ -369,7 +372,7 @@ class Component(object):
 			for name in ("RRULE","EXRULE"):
 				recurrs = self.list(name)
 				if len(recurrs) > 1:
-					logger.warn("property RRULE should not occur more than once")
+					logging.getLogger("pical").warn("property %s should not occur more than once" % name)
 				for recur in recurrs:
 					assert recur.get("FREQ"), "FREQ part is required in property %s" % name
 		
@@ -457,7 +460,7 @@ class Component(object):
 	
 	def addProperty(self, name, value, params):
 		if self.name == " root":
-			raise ValueError("no component to add to")
+			logging.getLogger("pical").error("no component to add to")
 		
 		pdic = dict(params)
 		tzinfo = self.pickTzinfo(pdic.get("TZID",[None])[0])
@@ -475,11 +478,11 @@ class Component(object):
 					typedValue = [vtype.parse(v, tzinfo) for v in value.split(delim)]
 				else:
 					typedValue = vtype.parse(value, tzinfo)
-			except:
+			except Exception as e:
 				pass
 		
 		if typedValue is None:
-			raise ValueError("invalid VALUE for property %s" % name)
+			raise ValueError("property %s invalid VALUE, none of %s" % (name, acceptTypes))
 		
 		self.properties.append((name, typedValue, params))
 	
@@ -1148,7 +1151,10 @@ class DateTime(datetime):
 	
 	@classmethod
 	def build(cls, self):
-		return self.strftime("%Y%m%dT%H%M%S")
+		if self.leap:
+			return self.strftime("%Y%m%dT%H%M60")
+		else:
+			return self.strftime("%Y%m%dT%H%M%S")
 
 
 @vtype("DURATION")
@@ -1182,21 +1188,24 @@ class Duration(timedelta):
 	@classmethod
 	def build(cls, self):
 		parts = []
-		if self < 0:
+		if self < timedelta(0):
 			parts.append("-")
 			self = -self
-		if self.days%7==0:
-			parts.append("%dW" % self.days//7)
+		parts.append("P")
+		if self.days == 0:
+			pass
+		elif self.days%7==0:
+			parts.append("%dW" % (self.days//7,))
 		else:
 			parts.append("%dD" % self.days)
 		if self.seconds > 0:
 			parts.append("T")
 			if self.seconds//3600:
-				parts.append("%dH" % self.seconds//3600)
+				parts.append("%dH" % (self.seconds//3600,))
 			if (self.seconds//60)%60:
-				parts.append("%dM" % (self.seconds//60)%60)
+				parts.append("%dM" % ((self.seconds//60)%60,))
 			if self.seconds%60:
-				parts.append("%dS" % self.seconds%60)
+				parts.append("%dS" % (self.seconds%60,))
 		return "".join(parts)
 
 @vtype("FLOAT")
@@ -1787,7 +1796,10 @@ class Time(time):
 	
 	@classmethod
 	def build(cls, self):
-		return "%02d%02d%02d" % (self.hour, self.minute, self.second)
+		arg = (self.hour, self.minute, self.second)
+		if self.leap:
+			arg = (self.hour, self.minute, 60)
+		return "%02d%02d%02d" % arg
 
 @vtype("URI")
 class Uri(str):
@@ -1802,34 +1814,47 @@ class Uri(str):
 
 @vtype("UTC-OFFSET")
 class UtcOffset(tzinfo):
-	offset = 0
+	pattern = re.compile(r"^[+-](?P<hours>\d{2})(?P<minutes>\d{2})(?P<seconds>\d{2})?$")
+	offset = timedelta(0)
 	def utcoffset(self, d):
-		return timedelta(minutes=self.offset)
+		return self.offset
 	
 	def dst(self, dt):
 		return timedelta(0)
 	
 	def tzname(self, dt):
-		if offset == 0:
+		if self.offset == timedelta(0):
 			return "UTC"
-		offset = abs(self.offset)
 		fmt = "UTC+%02d%02d"
-		if self.offset < 0:
+		offset = self.offset
+		if self.offset < timedelta(0):
 			fmt = "UTC-%02d%02d"
-		return fmt % (offset//60, offset%60)
+			offset = -self.offset
+		seconds = offset.seconds
+		minutes = seconds//60
+		if seconds % 60 == 0:
+			return fmt % (minutes//60, minutes%60)
+		else:
+			return (fmt+".%02d") % (minutes//60, minutes%60, seconds%60)
 	
 	@classmethod
 	def parse(cls, value, tzinfo):
-		if len(value)!=5:
+		parts = cls.pattern.match(value)
+		if parts is None:
 			raise ValueError("UTC-OFFSET format error")
-		offset = int(value[1:3])*60 + int(value[3:5])
-		if value[0]=="-":
-			offset = -offset
-		elif value[0]!="+":
-			raise ValueError("UTF-OFFSET starts with sign")
 		
+		delta_arg = {}
+		for k,v in parts.groupdict().items():
+			if v is None:
+				continue
+			delta_arg[k] = int(v)
+		
+		offset = timedelta(**delta_arg)
 		self = cls()
-		self.offset = offset
+		if value[0]=="-":
+			self.offset = -offset
+		else:
+			self.offset = offset
 		return self
 	
 	@classmethod
@@ -1839,7 +1864,13 @@ class UtcOffset(tzinfo):
 		if offset < timedelta():
 			fmt = "-%02d%02d"
 			offset = -offset
-		return fmt % (offset.seconds//3600, (offset.seconds%3600)//60)
+		
+		seconds = offset.seconds
+		minutes = seconds//60
+		if seconds % 60 == 0:
+			return fmt % (minutes//60, minutes%60)
+		else:
+			return (fmt+"%02d") % (minutes//60, minutes%60, seconds%60)
 
 utc = UtcOffset.parse("+0000", None)
 

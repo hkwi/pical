@@ -31,7 +31,7 @@ Time-range query example:
 from datetime import datetime
 import pical
 cals = pical.parse(open("tests/google_calendar_ex1.ics"))
-expcal = cals[0].time_range(datetime(2010,1,1,tzinfo=pical.utc), datetime.now(pical.utc), expand=True)
-for line in expcal.serialize():
+expcal = cals[0].time_range(expand=[datetime(2010,1,1,tzinfo=pical.utc), datetime.now(pical.utc)])
+for line in expcal.clone(in_utc=True).serialize():
 	print line
 ```

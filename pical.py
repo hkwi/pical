@@ -112,7 +112,7 @@ def parse(stream, encoding="UTF-8"):
 				logger.error("END does not match with BEGIN L%d" % lineno)
 		else:
 			try:
-				comp.addProperty(name, value, params)
+				comp.parseProperty(name, value, params)
 			except Exception as ex:
 				logger.error("property %s value parse error: %s L%d" % (name,ex,lineno))
 	
@@ -458,7 +458,7 @@ class Component(object):
 			except:
 				continue
 	
-	def addProperty(self, name, value, params):
+	def parseProperty(self, name, value, params):
 		if self.name == " root":
 			logging.getLogger("pical").error("no component to add to")
 		
@@ -524,11 +524,24 @@ class Component(object):
 				yield s
 		yield "END:%s" % self.name
 	
-	def clone(self):
+	def clone(self, in_utc=False):
 		# component is mutable, properties are immutable
 		exp = self.factory(self.name, self.tzdb)
-		exp.children = [c.clone() for c in self.children]
-		exp.properties += self.properties
+		if in_utc:
+			exp.children = [c.clone(in_utc=in_utc) for c in self.children if c.name!="VTIMEZONE"]
+			for name,value,params in self.properties:
+				if isinstance(value, (datetime,time)) and value.tzinfo:
+					value = value.astimezone(utc)
+					vparams = []
+					for name,values in params:
+						if name == "TZID":
+							continue
+						vparams.append((name,values))
+					params = vparams
+				exp.properties.append((name, value, params))
+		else:
+			exp.children = [c.clone(in_utc=in_utc) for c in self.children]
+			exp.properties += self.properties
 		return exp
 	
 	@classmethod
@@ -541,22 +554,25 @@ class Component(object):
 			self = cls(name, tzdb)
 		return self
 
-class Calendar(Component):
-	def time_range(self, start=None, end=None, floating_tz=None, component=None, expand=False):
-		# caldav time-range query
-		assert start or end, "start or end must be specified"
-		if start and end:
-			assert start < end, "end must be greater than start"
-		for dt in (start,end):
-			if dt:
-				assert isinstance(dt,datetime) and dt.tzinfo, "start, end must be a datetime in UTC"
-		if expand:
-			assert end, "expansion requires end"
+class Overlap(object):
+	def __init__(self, time_range, floating_tz=None):
+		self.time_range = time_range
+		self.floating_tz = floating_tz
+		self.dtcmp = vdatetime_cmp(floating_tz)
+	
+	def __call__(self, dtstart, dtend, obj):
+		# @dtstart, @dtend is the timespec we want to test.
+		# @obj is supplementaly information object, and may vary with components
+		# @return is the filtered object or None without overlap
+		return getattr(self, obj.name.lower())(dtstart, dtend, obj)
+	
+	def vevent(self, dtstart, dtend, obj):
+		start, end = self.time_range
+		dtcmp = self.dtcmp
 		
-		dtcmp = vdatetime_cmp(floating_tz)
-		def vevent_overlap(dtstart, dtend, obj):
-			ret = True
-			if dtend:
+		ret = True
+		if dtend:
+			if start:
 				if isinstance(dtend, timedelta): # DURATION
 					if dtend > timedelta(seconds=0):
 						ret &= dtcmp(start, dtstart+dtend) < 0
@@ -564,112 +580,213 @@ class Calendar(Component):
 						ret &= dtcmp(start, dtstart) <= 0
 				else:
 					ret &= dtcmp(start, dtend) < 0
-				if end:
-					ret &= dtcmp(end, dtstart) > 0
-			elif isinstance(dtstart, datetime):
+			if end:
+				ret &= dtcmp(end, dtstart) > 0
+		elif isinstance(dtstart, datetime):
+			if start:
 				ret &= dtcmp(start, dtstart) <= 0
+			if end:
 				ret &= dtcmp(end, dtstart) > 0
-			else:
+		else:
+			if start:
 				ret &= dtcmp(start, dtstart+timedelta(1)) < 0
+			if end:
 				ret &= dtcmp(end, dtstart) > 0
-			return ret
 		
-		def vtodo_overlap(dtstart, dtend, obj):
-			ret = True
-			if dtstart:
-				if dtend:
-					if isinstance(dtend, timedelta): # DURATION
-						ret &= dtcmp(strt,dtstart+dtend)<=0
-						if end:
-							ret &= dtcmp(end>dtstart) or dtcmp(end,dtstart+dtend)>=0
-					else:
-						ret &= dtcmp(start,dtend)<0 or dtcmp(start,dtstart)<=0
-						if end:
-							ret &= dtcmp(end,dtstart)>0 or dtcmp(end,dtend)>=0
+		if ret:
+			return obj
+	
+	def vtodo(self, dtstart, dtend, obj):
+		start, end = self.time_range
+		dtcmp = self.dtcmp
+		
+		ret = True
+		if dtstart:
+			if dtend:
+				if isinstance(dtend, timedelta): # DURATION
+					if start:
+						ret &= dtcmp(start,dtstart+dtend)<=0
+					if end:
+						ret &= dtcmp(end>dtstart) or dtcmp(end,dtstart+dtend)>=0
 				else:
-					ret &= dtcmp(start,dtstart)<=0
+					if start:
+						ret &= dtcmp(start,dtend)<0 or dtcmp(start,dtstart)<=0
 					if end:
-						ret &= dtcmp(end,dtstart)>0
+						ret &= dtcmp(end,dtstart)>0 or dtcmp(end,dtend)>=0
 			else:
-				completed = obj.get("COMPLETED")
-				created = obj.get("CREATED")
-				if completed:
-					if created:
+				if start:
+					ret &= dtcmp(start,dtstart)<=0
+				if end:
+					ret &= dtcmp(end,dtstart)>0
+		else:
+			completed = obj.get("COMPLETED")
+			created = obj.get("CREATED")
+			if completed:
+				if created:
+					if start:
 						ret &= dtcmp(start,created)<=0 or dtcmp(start,completed)<=0
-						if end:
-							ret &= dtcmp(end,created)>=0 or dtcmp(end,completed)>=0
-					else:
-						ret &= dtcmp(start,completed)<=0
-						if end:
-							ret &= dtcmp(end,completed)>=0
-				elif created:
 					if end:
-						ret &= end > created
-			return ret
+						ret &= dtcmp(end,created)>=0 or dtcmp(end,completed)>=0
+				else:
+					if start:
+						ret &= dtcmp(start,completed)<=0
+					if end:
+						ret &= dtcmp(end,completed)>=0
+			elif created:
+				if end:
+					ret &= end > created
+		if ret:
+			return obj
+	
+	def vjournal(self, dtstart, dtend, obj):
+		start, end = self.time_range
+		dtcmp = self.dtcmp
 		
-		def vjournal_overlap(dtstart, dtend, obj):
-			ret = True
-			if dtstart:
+		ret = True
+		if dtstart:
+			if start:
 				if isinstance(dtstart,datetime):
 					ret &= dtcmp(start,dtstart)<=0
 				else:
 					ret &= dtcmp(start,dtstart+timedelta(1))<0
-				if end:
-					ret &= dtcmp(end,dtstart)>0
-			else:
-				ret = False
-			return ret
+			if end:
+				ret &= dtcmp(end,dtstart)>0
+		else:
+			ret = False
 		
-		def vfreebusy_overlap(dtstart, dtend, obj):
-			ret = True
-			freebusy = obj.get("FREEBUSY")
-			if dtstart and dtend:
+		if ret:
+			return obj
+	
+	def vfreebusy(self, dtstart, dtend, obj):
+		start, end = self.time_range
+		dtcmp = self.dtcmp
+		
+		ret = True
+		freebusy = obj.list("FREEBUSY")
+		if dtstart and dtend:
+			if start:
 				ret &= dtcmp(start,dtend)<=0
-				if end:
-					ret &= dtcmp(end,dtstart)>0
-			elif freebusy:
-				ret &= dtcmp(start,freebusy[1])<0
-				ret &= dtcmp(end,freebusy[0])>0
-			else:
-				ret = False
-			
-			return ret
-		
-		def valarm_overlap(dtstart, dtend, obj):
-			# dtstart, dtend is the container's value
-			for name,value,params in obj.properties:
-				if name!="TRIGGER":
-					continue
-				
-				if isinstance(value, timedelta):
-					rel = dict(params).get("RELATED",[""])[0]
-					if rel == "START":
-						trigger_time = dtstart - value
-					elif rel == "END":
-						if isinstance(dtend, timedelta):
-							trigger_time = dtstart + dtend - value
-						else:
-							trigger_time = dtend - value
-				else:
-					trigger_time = value
-				
-				duration = obj.get("DURATION")
-				for count in range(obj.get("REPEAT",0)+1):
-					dt = trigger_time + duration*count
-					ret = dtcmp(start, dt)<=0
+			if end:
+				ret &= dtcmp(end,dtstart)>0
+		elif freebusy:
+			fbs_hit = False
+			for fbs in freebusy:
+				for fb in fbs:
+					fb_hit = True
+					if start:
+						fb_hit &= dtcmp(start,fb[1])<0
 					if end:
-						ret &= dtcmp(end, dt)>0
-					if ret:
-						return True
-			return False
+						fb_hit &= dtcmp(end,fb[0])>0
+					if fb_hit:
+						fbs_hit = True
+			if not fbs_hit:
+				ret = False
+		else:
+			ret = False
 		
-		overlaps = dict(
-			VEVENT = vevent_overlap,
-			VTODO = vtodo_overlap,
-			VJOURNAL = vjournal_overlap,
-			VFREEBUSY = vfreebusy_overlap,
-			VALARM = valarm_overlap,
-		)
+		return obj
+	
+	def valarm(self, dtstart, dtend, obj):
+		# dtstart, dtend is the container's value
+		start, end = self.time_range
+		dtcmp = self.dtcmp
+		
+		for name,value,params in obj.properties:
+			if name!="TRIGGER":
+				continue
+			
+			if isinstance(value, timedelta):
+				rel = dict(params).get("RELATED",["START"])[0]
+				if rel == "START":
+					trigger_time = dtstart + value
+				elif rel == "END":
+					if isinstance(dtend, timedelta):
+						trigger_time = dtstart + dtend + value
+					elif isinstance(dtend, datetime):
+						trigger_time = dtend + value
+					elif isinstance(dtend, date):
+						trigger_time = datetime.combine(dtend,time(tzinfo=self.floating_tz)) + value
+					else:
+						raise ValueError("unknown end value type")
+				else:
+					raise ValueError("unknown RELATED value")
+			else:
+				trigger_time = value
+			
+			def trigger_cmp(dt):
+				ret = True
+				if start:
+					ret &= dtcmp(start, dt)<=0
+				if end:
+					ret &= dtcmp(end, dt)>0
+				if ret:
+					return True
+			
+			if trigger_cmp(trigger_time):
+				return True
+			
+			duration = obj.get("DURATION")
+			if duration:
+				for count in range(obj.get("REPEAT",0)):
+					dt = trigger_time + duration*(count+1)
+					if trigger_cmp(dt):
+						return True
+		return False
+
+class Calendar(Component):
+	def time_filter(self, fb_range=None, floating_tz=None):
+		dtcmp = vdatetime_cmp(floating_tz)
+		exp = self.clone()
+		for c in exp.children:
+			if c.name == "VFREEBUSY" and fb_range:
+				start,end = fb_range
+				properties = []
+				for name,value,params in c.properties:
+					if name == "FREEBUSY":
+						for fb in value:
+							fb_hit = True
+							if start:
+								fb_hit &= dtcmp(start,fb[1])<0
+							if end:
+								fb_hit &= dtcmp(end,fb[0])>0
+							if fb_hit:
+								properties.append((name,value,params))
+								break
+					else:
+						properties.append((name,value,params))
+				c.properties = properties
+		return exp
+	
+	def time_range(self, component=None, recur=None, expand=None, time_range=None, alarm_range=None, floating_tz=None):
+		'''
+		time-range family that requires testing effective component timespec.
+		`time_range` keyword argument for time-range, and `recur` for limit-recurrence-set,
+		`expand` for expand, `alarm_range` for time-range spec in alarm.
+		
+		For limit-freebusy-set, use time_filter method.
+		'''
+		if recur and expand:
+			raise NotImplementedError("either limit-recurrence-set or expand could be specified")
+		
+		for start_end in (recur, expand):
+			if start_end is None:
+				continue
+			start,end = start_end
+			assert start and end, "both start and end is required for limit-recurrence-set or expand"
+			assert end > start, "end must be greater than start"
+			for dt in start_end:
+				assert isinstance(dt,datetime) and dt.tzinfo, "start, end must be a datetime in UTC"
+		
+		for start_end in (time_range, alarm_range):
+			if start_end is None:
+				continue
+			start,end = start_end
+			assert start or end, "start and or end is required for time-range"
+			if start and end:
+				assert end > start, "end must be greater than start"
+			for dt in start_end:
+				if dt:
+					assert isinstance(dt,datetime) and dt.tzinfo, "start, end must be a datetime in UTC"
 		
 		def expanded(dtstart,dtend,base,upon):
 			def value_param(name, value, params):
@@ -696,18 +813,18 @@ class Calendar(Component):
 			
 			override = {}
 			# RECURRENCE-ID
-			if base["DTSTART"] != dtstart:
+			if base.get("DTSTART") != dtstart:
 				override["RECURRENCE-ID"] = dtstart
 			# DTSTART
-			override["DTSTART"] = dtstart
+			if dtstart is not None:
+				override["DTSTART"] = dtstart
 			if upon and upon.get("DTSTART"):
-				override["DTSTART"] = upon["DTSTART"] + (dtstart - upon["RECURRENCE-ID"])
+				override["DTSTART"] = upon["DTSTART"] + (dtstart - upon["RECURRENCE-ID"]) # for RANGE parameter
 			# DTEND
 			if dtend is None:
-				t = base.get("DURATION",base.get("DTEND",base.get("DUE")))
-				if not isinstance(t,timedelta):
-					t = dtstart + (t - base["DTSTART"])
-				dtend = t
+				dtend = base.get("DURATION",base.get("DTEND",base.get("DUE")))
+				if base.get("DTSTART") and not isinstance(dtend, timedelta):
+					dtend = dtstart + (dtend - base["DTSTART"])
 			if upon:
 				t = upon.get("DURATION",upon.get("DTEND",upon.get("DUE")))
 				if t:
@@ -718,14 +835,14 @@ class Calendar(Component):
 					else:
 						logging.getLogger("pical").error("override failure: DTEND/DUE specified without DTSTART")
 			if dtend:
-				if isinstance(t, timedelta):
+				if isinstance(dtend, timedelta):
 					override["DURATION"] = dtend
 				elif cname == "VTODO":
 					override["DUE"] = dtend
 				else:
 					override["DTEND"] = dtend
 			
-			if dtstart == base["DTSTART"] and not expand:
+			if dtstart == base.get("DTSTART") and not expand:
 				exp = base
 			else:
 				exp = base.clone()
@@ -781,14 +898,60 @@ class Calendar(Component):
 			
 			return exp
 		
-		found = set()
-		found_ordered = []
+		def filter_passed(obj):
+			dtstart = obj.get("DTSTART")
+			dtend = comp_dtend(obj)
+			
+			if alarm_range:
+				alarm_hit = False
+				children = []
+				for c in obj.children:
+					if c.name != "VALARM":
+						children.append(c)
+						continue
+					if Overlap(alarm_range, floating_tz)(dtstart,dtend,c):
+						children.append(c)
+						alarm_hit = True
+				
+				def filtered_alarms():
+					if len(children) == (obj.children):
+						return obj
+					exp = obj.clone()
+					exp.children = children
+					return exp
+				
+				if alarm_hit:
+					if time_range:
+						if Overlap(time_range, floating_tz)(dtstart,dtend,obj):
+							return filtered_alarms()
+					else:
+						return filtered_alarms()
+			elif time_range:
+				if Overlap(time_range, floating_tz)(dtstart,dtend,exp):
+					return obj
+			else:
+				return obj
+		
+		if recur is None and expand is None and time_range is None and alarm_range is None:
+			return self
+		
+		open_end = True
+		if recur is None and expand is None:
+			if time_range and time_range[1]:
+				open_end = False
+			if alarm_range and alarm_range[1]:
+				open_end = False
+		else:
+			open_end = False
+		
+		found = []
 		for cname in "VEVENT VTODO VJOURNAL VFREEBUSY".split():
-			if component is not None and component != "VALARM" and component != cname:
+			if component and component != cname:
 				continue
 			
 			uids = set([c.get("UID") for c in self.children if c.name==cname])
-			if end is None:
+			
+			if open_end:
 				for base in self.children:
 					if cname != base.name:
 						continue
@@ -799,73 +962,71 @@ class Calendar(Component):
 					
 					if ulim_rrule and ulim_rrule!=ulim_erule:
 						uid = base.get("UID")
+						if uid is None:
+							continue
 						uids.remove(uid)
-						found.add(base)
+						
+						if base not in found:
+							found.append(base)
+						
+						limited = []
 						for upon in self.children:
 							if upon.get("RECURRENCE-ID") is None or cname!=upon.name or upon["UID"]!=uid:
 								continue
 							
+							# RANGE THISANDFUTURE will be always included
 							future = False
 							for name,value,params in rmod.properties:
 								if name == "RECURRENCE-ID" and dict(params).get("RANGE")=="THISANDFUTURE":
-									found.add(upon)
+									if upon not in found:
+										found.append(upon)
 									future = True
 							if future:
 								continue
 							
-							expansion_hit = False
-							if comp_dtend(upon) is None:
-								wait1 = False
-								for dtstart,dtend,base2,upon2 in self.scan_uid(cname, uid, floating_tz, end):
-									if upon == upon2:
-										exp = expanded(dtstart,dtend,base,upon)
-										expansion_hit = True
-										if overlaps[cname](exp["DTSTART"], comp_dtend(exp), exp):
-											found.add(c)
-									if wait1:
-										break
-									if dtstart > upon["DTSTART"]:
-										wait1 = True
-							if not expansion_hit:
-								if overlaps[cname](upon["DTSTART"], comp_dtend(upon), upon):
-									found.add(c)
+							limited.append(upon)
+						
+						# check for starting
+						if not limited:
+							break
+						rids = sorted([c["RECURRENCE-ID"] for c in limited], key=vdatetime_cmp(floating_tz), reverse=True)
+						scanner = self.scan_uid(cname, uid, floating_tz, rids[0])
+						while len(limited):
+							dtstart,dtend,_,upon = next(scanner)
+							# assert base2 == base
+							if upon in limited:
+								if filter_passed(dtstart,dtend,base,upon):
+									found.append(upon)
+									limited.remove(upon)
+			
+			merger = Merger(key=cmp_to_key(vdatetime_cmp(floating_tz)))
 			for uid in uids:
-				for dtstart,dtend,base,upon in self.scan_uid(cname, uid, floating_tz, end):
-					exp = expanded(dtstart,dtend,base,upon)
-					dtstart = exp.get("DTSTART")
-					dtend = comp_dtend(exp)
-					
-					if (component is None or component == "VALARM") and cname in ("VEVENT","VTODO"):
-						children = base.children
-						if upon:
-							children += upon.children
-						for c in children:
-							if c.name != "VALARM":
-								continue
-							
-							if overlaps["VALARM"](dtstart, dtend, c):
-								if expand:
-									found_ordered.append(exp)
-								else:
-									found.add(base)
-									if upon:
-										found.add(upon)
-					
-					if component is None or component == cname:
-						if overlaps[cname](dtstart, dtend, exp):
-							if expand:
-								found_ordered.append(exp)
-							else:
-								found.add(base)
-								if upon:
-									found.add(upon)
+				merger.add(self.scan_uid(cname, uid, floating_tz, end))
+			
+			for (dtstart,dtend,base,upon), in merger():
+				exp = expanded(dtstart,dtend,base,upon)
+				if recur:
+					recur_overlap = Overlap(recur, floating_tz)
+					if not recur_overlap(dtstart,dtend,base) and not recur_overlap(exp.get("DTSTART"), comp_dtend(exp), exp):
+						continue
+				if expand:
+					if not Overlap(expand, floating_tz)(exp.get("DTSTART"), comp_dtend(exp), exp):
+						continue
+				
+				obj = filter_passed(exp)
+				if obj:
+					if expand:
+						if obj not in found:
+							found.append(obj)
+					else:
+						if base not in found:
+							found.append(base)
+						if upon and upon not in found:
+							found.append(upon)
+		
 		cal = Calendar(self.name, self.tzdb)
 		cal.children = [c for c in self.children if c.name=="VTIMEZONE"]
-		if expand:
-			cal.children += found_ordered
-		else:
-			cal.children += list(found)
-		
+		cal.children += found
 		cal.properties += self.properties
 		return cal
 	
@@ -917,7 +1078,7 @@ class Calendar(Component):
 					
 					m.add(iter(dates), rbase)
 			
-			dtstart = rbase["DTSTART"]
+			dtstart = rbase.get("DTSTART")
 			def dual(gen):
 				for v in gen:
 					if isinstance(v, Duration):
@@ -959,8 +1120,11 @@ class Calendar(Component):
 		
 		combined = combined()
 		for (dtstart, dtend, rbase), in combined:
-			if end and vdatetime_cmp(floating_tz)(dtstart,end) >0:
-				break
+			if end:
+				if dtstart and vdatetime_cmp(floating_tz)(dtstart,end) >0:
+					break
+				elif dtend and vdatetime_cmp(floating_tz)(dtend,end) >0:
+					break
 			
 			def lookup_modifier(dttest):
 				for rmod in rmods:
@@ -1126,7 +1290,7 @@ class Date(date):
 		m = cls.pattern.match(value)
 		if not m:
 			raise TypeError("DATE value format error")
-		year,month,mday = map(int, m.groups())
+		year,month,mday = list(map(int, m.groups()))
 		self = date.__new__(cls, year, month, mday)
 		return self
 	
@@ -1151,7 +1315,7 @@ class DateTime(datetime):
 	
 	@classmethod
 	def build(cls, self):
-		if self.leap:
+		if isinstance(self,DateTime) and self.leap:
 			return self.strftime("%Y%m%dT%H%M60")
 		else:
 			return self.strftime("%Y%m%dT%H%M%S")
@@ -1298,7 +1462,7 @@ class Recur(object):
 			elif k in ("COUNT","INTERVAL"):
 				items.append((k,int(v)))
 			elif k in cls.ranges:
-				items.append((k,map(digits(*cls.ranges[k]), v.split(","))))
+				items.append((k,list(map(digits(*cls.ranges[k]), v.split(",")))))
 			elif k == "UNTIL":
 				try:
 					items.append((k,Date.parse(v, tzinfo)))
@@ -1306,7 +1470,7 @@ class Recur(object):
 					items.append((k,DateTime.parse(v, tzinfo)))
 			elif k == "BYDAY":
 				values = v.split(",")
-				map(digits(True,1,366), [v[:-2] for v in values if len(v)!=2])
+				list(map(digits(True,1,366), [v[:-2] for v in values if len(v)!=2]))
 				for v in values:
 					if v[-2:] not in cls.weekday:
 						raise ValueError("BYDAY parameter error")
@@ -1797,7 +1961,7 @@ class Time(time):
 	@classmethod
 	def build(cls, self):
 		arg = (self.hour, self.minute, self.second)
-		if self.leap:
+		if isinstance(self,DateTime) and self.leap:
 			arg = (self.hour, self.minute, 60)
 		return "%02d%02d%02d" % arg
 

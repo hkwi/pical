@@ -187,66 +187,18 @@ def test_caldav_7_10_1():
 	dtstart = datetime(2006,1,4,14,tzinfo=pical.utc)
 	dtend = datetime(2006,1,4,22,tzinfo=pical.utc)
 	
-	root = None
-	total = pical.Component("VFREEBUSY", {})
-	total.properties.append(("DTSTART", dtstart, []))
-	total.properties.append(("DTEND", dtend, []))
+	root = pical.Component.factory("VCALENDAR", {})
+	root.parseProperty("VERSION","2.0",[])
+	root.parseProperty("PRODID","-//Example Corp.//CalDAV Server//EN",[])
 	for f in glob.glob("%s/rfc4791_b_*.ics" % os.path.dirname(__file__)):
 		for cal in pical.parse(open(f,"rb")):
-			if root is None:
-				root = cal.clone()
-				root.children = []
-			
 			# <C:time-range start="20060104T140000Z" end="20060104T220000Z"/>
-			cal = cal.time_range(expand=[dtstart,dtend])
-			cal = cal.clone(in_utc=True)
-			assert cal.name == "VCALENDAR"
-			
-			e = cal.clone()
-			e.children = []
-			fb = pical.Component("VFREEBUSY", cal.tzdb)
-			for comp in cal.children:
-				if comp.name == "VTIMEZONE":
-					e.children.append(comp)
-				elif comp.name == "VFREEBUSY" and comp.list("FREEBUSY"):
-					if comp.get("FBTYPE","BUSY") != "FREE":
-						for name,value,params in comp.properties:
-							if name == "FREEBUSY":
-								fb.properties.append((name,value,params))
-				elif comp.name == "VEVENT":
-					transp = comp.get("TRANSP", "OPAQUE")
-					status = comp.get("STATUS", "CONFIRMED")
-					fbtype = None
-					if transp == "OPAQUE":
-						if status == "CONFIRMED":
-							fbtype = None
-						elif status == "CANCELLED":
-							fbtype = "FREE"
-						elif status == "TENTATIVE":
-							fbtype = "BUSY-TENTATIVE"
-						else:
-							fbtype = None
-					elif transp == "TRANSPARENT":
-						if status in "CONFIRMED CANCELLED TENTATIVE".split() or status.startswith("X-"):
-							fbtype = "FREE"
-					if fbtype != "FREE":
-						start = comp.get("DTSTART")
-						end = comp.get("DTEND", comp.get("DURATION"))
-						x = tuple.__new__(pical.Period, (start, end))
-						params = []
-						if fbtype != None:
-							params.append(("FBTYPE",[fbtype]))
-						fb.properties.append(("FREEBUSY", [tuple.__new__(pical.Period, (start, end))], params))
-			if fb.properties:
-				e.children.append(fb)
-				e = e.time_filter(fb_range=[datetime(2006,1,4,14,tzinfo=pical.utc), datetime(2006,1,4,22,tzinfo=pical.utc)])
-				for comp in e.children:
-					if comp.name == "VFREEBUSY":
-						for name,value,params in comp.properties:
-							if name == "FREEBUSY":
-								total.properties.append((name,value,params))
-	if total.properties:
-		root.children.append(total)
+			cal = cal.time_range(expand=[dtstart,dtend]).clone(in_utc=True)
+			root.freebusy_merge(cal)
+	fb = root.children[0]
+	fb.properties.append(("DTSTART", dtstart, []))
+	fb.properties.append(("DTEND", dtend, []))
+	root = root.time_filter(fb_range=[dtstart,dtend])
 	
 	f2 = "%s/rfc4791_7_10_1.ics" % os.path.dirname(__file__)
 	if [c for c in root.children if c.name!="VTIMEZONE"]:

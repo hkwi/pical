@@ -585,7 +585,7 @@ class Component(object):
 	
 	def clone(self, in_utc=False):
 		# component is mutable, properties are immutable
-		exp = self.factory(self.name, self.tzdb)
+		exp = Component.factory(self.name, self.tzdb)
 		if in_utc:
 			exp.children = [c.clone(in_utc=in_utc) for c in self.children if c.name!="VTIMEZONE"]
 			for name,value,params in self.properties:
@@ -1206,6 +1206,52 @@ class Calendar(Component):
 				return None
 			
 			yield dtstart, dtend, rbase, lookup_modifier(dtstart)
+	
+	def freebusy_merge(self, comp):
+		fb = None
+		for c in self.children:
+			if c.name == "VFREEBUSY":
+				fb = c
+				break
+		
+		if fb is None:
+			fb = Component.factory("VFREEBUSY", self.tzdb)
+			self.children.append(fb)
+		
+		if comp.name == "VCALENDAR":
+			for c in comp.children:
+				self.freebusy_merge(c)
+		elif comp.name == "VEVENT":
+			transp = comp.get("TRANSP", "OPAQUE")
+			status = comp.get("STATUS", "CONFIRMED")
+			fbtype = None
+			if transp == "OPAQUE":
+				if status == "CONFIRMED":
+					fbtype = None
+				elif status == "CANCELLED":
+					fbtype = "FREE"
+				elif status == "TENTATIVE":
+					fbtype = "BUSY-TENTATIVE"
+				else:
+					fbtype = None
+			elif transp == "TRANSPARENT":
+				if status in "CONFIRMED CANCELLED TENTATIVE".split() or status.startswith("X-"):
+					fbtype = "FREE"
+			else:
+				raise ValueError("TRANSP is OPAQUE or TRANSPARENT")
+		
+			if fbtype != "FREE":
+				start = comp.get("DTSTART")
+				end = comp.get("DTEND",
+					comp.get("DURATION"))
+				params = []
+				if fbtype != None:
+					params.append(("FBTYPE",[fbtype]))
+				fb.properties.append(("FREEBUSY", [Period((start, end))], params))
+		elif comp.name == "VFREEBUSY":
+			for name,value,params in comp.properties:
+				if name=="FREEBUSY" and dict(params).get("FBTYPE","BUSY") != "FREE":
+					fb.properties.append((name,value,params))
 
 class Timezone(tzinfo, Component):
 	def utcoffset(self, dt):

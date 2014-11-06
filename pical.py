@@ -1045,10 +1045,12 @@ class Calendar(Component):
 						# check for starting
 						if not limited:
 							break
-						rids = sorted([c["RECURRENCE-ID"] for c in limited], key=vdatetime_cmp(floating_tz), reverse=True)
-						scanner = self.scan_uid(cname, uid, floating_tz, rids[0])
+						scan_limit = sorted([c["RECURRENCE-ID"] for c in limited], key=vdatetime_cmp(floating_tz))[-1]
+						scanner = self.scan_uid(cname, uid, floating_tz)
 						while len(limited):
 							dtstart,dtend,_,upon = next(scanner)
+							if dtstart > scan_limit:
+								break
 							# assert base2 == base
 							if upon in limited:
 								if filter_passed(dtstart,dtend,base,upon):
@@ -1057,9 +1059,14 @@ class Calendar(Component):
 			
 			merger = Merger(key=cmp_to_key(vdatetime_cmp(floating_tz)))
 			for uid in uids:
-				merger.add(self.scan_uid(cname, uid, floating_tz, end))
+				merger.add(self.scan_uid(cname, uid, floating_tz))
 			
 			for (dtstart,dtend,base,upon), in merger():
+				if dtstart and vdatetime_cmp(floating_tz)(dtstart,end) >0:
+					break
+				elif dtend and vdatetime_cmp(floating_tz)(dtend,end) >0:
+					break
+				
 				exp = expanded(dtstart,dtend,base,upon)
 				if recur:
 					recur_overlap = Overlap(recur, floating_tz)
@@ -1086,7 +1093,7 @@ class Calendar(Component):
 		cal.properties += self.properties
 		return cal
 	
-	def scan(self, component_name, floating_tz=None, end=None):
+	def scan(self, component_name, floating_tz=None):
 		# yields (onset_dtstart, duration_or_dtend?, generator_component, modifier_component?)
 		uids = set()
 		for c in self.children:
@@ -1096,12 +1103,12 @@ class Calendar(Component):
 		
 		merger = Merger(key=cmp_to_key(vdatetime_cmp(floating_tz)))
 		for uid in uids:
-			merger.add(self.scan_uid(component_name, uid, end=None))
+			merger.add(self.scan_uid(component_name, uid))
 		
 		for m in merger():
 			yield m[0]
 	
-	def scan_uid(self, component_name, uid, floating_tz=None, end=None):
+	def scan_uid(self, component_name, uid, floating_tz=None):
 		# yields (onset_dtstart, duration_or_dtend?, generator_component, modifier_component?)
 		rbases = []
 		rmods = []
@@ -1176,12 +1183,6 @@ class Calendar(Component):
 		
 		combined = combined()
 		for (dtstart, dtend, rbase), in combined:
-			if end:
-				if dtstart and vdatetime_cmp(floating_tz)(dtstart,end) >0:
-					break
-				elif dtend and vdatetime_cmp(floating_tz)(dtend,end) >0:
-					break
-			
 			def lookup_modifier(dttest):
 				for rmod in rmods:
 					for name,value,params in rmod.properties:

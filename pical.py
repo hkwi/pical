@@ -13,10 +13,13 @@ class uc(str):
 		return self.upper().__hash__()
 	
 	def __eq__(self, other):
-		return self.upper() == other.upper()
+		try:
+			return self.upper() == other.upper()
+		except:
+			return False
 	
 	def __ne__(self, other):
-		return self.upper() != other.upper()
+		return not self.__eq__(other)
 
 def digits(sign, lower, upper):
 	def inner(value):
@@ -802,7 +805,10 @@ class Calendar(Component):
 						for fb in value:
 							fb_hit = True
 							if start:
-								fb_hit &= dtcmp(start,fb[1])<0
+								if isinstance(fb[1],datetime):
+									fb_hit &= dtcmp(start,fb[1])<0
+								else:
+									fb_hit &= dtcmp(start,fb[0]+fb[1])<0
 							if end:
 								fb_hit &= dtcmp(end,fb[0])>0
 							if fb_hit:

@@ -83,7 +83,17 @@ def test_range():
 		print(l)
 	assert len([c for c in q.children if c.name=="VEVENT"])==3
 
+def test_eq():
+	a = pical.parse(open("%s/google_calendar_ex1.ics" % os.path.dirname(__file__),"rb"))[0]
+	b = pical.parse(open("%s/google_calendar_ex1.ics" % os.path.dirname(__file__),"rb"))[0]
+	assert a==b, "__eq__ does not work"
+	assert not a!=b, "__ne__ does not work"
+	c = pical.parse(open("%s/rfc5545_3_4.ics" % os.path.dirname(__file__),"rb"))[0]
+	assert a!=c, "__ne__ does not work"
+	assert not a==c, "__eq__ does not work"
+
 if __name__=="__main__":
+	test_eq()
 	test_parse()
 	test_range()
 	print("### 4791 7.8.1 ###")

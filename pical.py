@@ -187,7 +187,35 @@ class Parameter(object):
 			else:
 				pvalues.append(value)
 		return pvalues
-
+	
+	@classmethod
+	def fill(cls, name, value, params):
+		def tzhook(value,params):
+			if value.tzinfo and not Timezone.is_utc(value.tzinfo):
+				if isinstance(value.tzinfo, Timezone):
+					tzid = [value.tzinfo["TZID"]]
+				else:
+					base = str(value.tzinfo)
+					tzid = ["/"+base, base]
+				
+				ptzid = dict(params).get("TZID")
+				if ptzid is None:
+					params.append(("TZID",[tzid[0]]))
+				elif ptzid[0] != tzid[0]:
+					if ptzid[0] not in tzid:
+						logging.getLogger("pical").warn("TZID conflict %s in %s" % (ptzid[0],tzid))
+			return params
+		
+		vparams = list(params)
+		klass = vtype_resolve(value)
+		if klass in (DateTime, Time):
+			vparams = tzhook(value,vparams)
+		elif klass == Period:
+			vparams = tzhook(value[0], vparams)
+			if isinstance(value[1], datetime):
+				vparams = tzhook(value[1], vparams)
+		return vparams
+	
 class Component(object):
 	valueTypes = {
 		"CALSCALE": "TEXT",
@@ -323,6 +351,31 @@ class Component(object):
 		self.tzdb = tzdb
 		self.children = []
 		self.properties = []
+	
+	def __eq__(self, other):
+		if self.__class__ != other.__class__:
+			return False
+		
+		if self.name != other.name:
+			return False
+		
+		if sorted(self.properties) != sorted(other.properties):
+			return False
+		
+		for a,b in ((self.children,other.children),(other.children,self.children)):
+			for c1 in a:
+				hit = False
+				for c2 in b:
+					if c1 == c2:
+						hit = True
+						break
+				if not hit:
+					return False
+		
+		return True
+	
+	def __ne__(self, other):
+		return not self.__eq__(other)
 	
 	def __getitem__(self, name):
 		for prop in self.properties:
@@ -489,34 +542,31 @@ class Component(object):
 	def serialize(self):
 		yield "BEGIN:%s" % self.name
 		
-		def tzhook(base,value,params):
-			if value.tzinfo is not None:
-				if value.tzinfo == utc or value.tzinfo.tzname(datetime.now()) == "UTC":
-					base += "Z"
-				elif dict(params).get("TZID") is None:
-					if isinstance(value.tzinfo, Timezone):
-						params.append(("TZID", [value.tzinfo["TZID"]]))
-					else:
-						params.append(("TZID", ["/"+str(value)]))
-			return base,params
+		def tzhook(value,params):
+			if value.tzinfo is None or value.tzinfo == utc or value.tzinfo.tzname(datetime.now()) == "UTC":
+				pass
+			elif dict(params).get("TZID") is None:
+				if isinstance(value.tzinfo, Timezone):
+					params.append(("TZID", [value.tzinfo["TZID"]]))
+				else:
+					params.append(("TZID", ["/"+str(value)]))
+			return params
 		
 		for name,value,params in self.properties:
-			vparams = list(params)
-			def build_value(value, vparams):
+			vparams = Parameter.fill(name, value, params)
+			def build_value(value):
 				klass = vtype_resolve(value)
 				if klass:
 					vstr = klass.build(value)
-					if klass in (DateTime, Time):
-						vstr,vparams = tzhook(vstr,value,vparams)
 				else:
 					vstr = repr(value)
 				return vstr
 			
 			delim = self.valueDelimiter.get(name)
 			if delim:
-				vstr = delim.join([build_value(v,vparams) for v in value])
+				vstr = delim.join([build_value(v) for v in value])
 			else:
-				vstr = build_value(value,vparams)
+				vstr = build_value(value)
 			
 			yield "%s%s:%s" % (name, "".join([";%s=%s" % (k,",".join(Parameter.native2raw(k,v))) for k,v in vparams]), vstr)
 		for c in self.children:
@@ -1204,7 +1254,13 @@ class Timezone(tzinfo, Component):
 			else:
 				data = d
 		return data
-
+	
+	@classmethod
+	def is_utc(cls, info):
+		if info and (info == utc
+				or info.tzname(datetime.now()) == "UTC"):
+			return True
+		return False
 
 ## Property Value Data Types
 _vtype = {}
@@ -1240,6 +1296,11 @@ def vtype_resolve(value):
 	elif (isinstance(value,tuple) and len(value)==2 
 			and isinstance(value[0],datetime) and isinstance(value[1],(datetime,timedelta))):
 		return Period
+
+def rich_eq(cls):
+	cls.__eq__ = lambda self,other: cls.build(self) == vtype_resolve(other).build(other)
+	cls.__ne__ = lambda self,other: cls.build(self) != vtype_resolve(other).build(other)
+	return cls
 
 @vtype("BINARY")
 class Binary(bytes):
@@ -1282,6 +1343,7 @@ class CalAddress(str):
 	def build(cls, self):
 		return self
 
+@rich_eq
 @vtype("DATE")
 class Date(date):
 	pattern = re.compile(r"^(\d{4})(\d{2})(\d{2})$")
@@ -1298,6 +1360,7 @@ class Date(date):
 	def build(cls, self):
 		return "%04d%02d%02d" % (self.year, self.month, self.day)
 
+@rich_eq
 @vtype("DATE-TIME")
 class DateTime(datetime):
 	leap = 0
@@ -1316,11 +1379,17 @@ class DateTime(datetime):
 	@classmethod
 	def build(cls, self):
 		if isinstance(self,DateTime) and self.leap:
-			return self.strftime("%Y%m%dT%H%M60")
+			base = self.strftime("%Y%m%dT%H%M60")
 		else:
-			return self.strftime("%Y%m%dT%H%M%S")
+			base = self.strftime("%Y%m%dT%H%M%S")
+		
+		if Timezone.is_utc(self.tzinfo):
+			base += "Z"
+		
+		return base
 
 
+@rich_eq
 @vtype("DURATION")
 class Duration(timedelta):
 	pattern = re.compile(r"^(?P<sign>\+?|-)?P"
@@ -1400,6 +1469,7 @@ class Integer(int):
 	def build(cls, self):
 		return "%d" % self
 
+@rich_eq
 @vtype("PERIOD")
 class Period(tuple):
 	@classmethod
@@ -1420,6 +1490,7 @@ class Period(tuple):
 			pair = (DateTime.build(self[0]), DateTime.build(self[1]))
 		return "%s/%s" % pair
 
+@rich_eq
 @vtype("RECUR")
 class Recur(object):
 	freq = ("SECONDLY", "MINUTELY", "HOURLY", "DAILY", "WEEKLY", "MONTHLY", "YEARLY")
@@ -1929,6 +2000,7 @@ class Text(str):
 		esc = dict([(a,b) for b,a in cls.escaping])
 		return "".join([esc.get(tok, tok) for tok in cls.build_pattern.split(self)])
 
+@rich_eq
 @vtype("TIME")
 class Time(time):
 	pattern = re.compile(r"^(\d{2})(\d{2})(\d{2})(Z?)$")
@@ -1976,10 +2048,12 @@ class Uri(str):
 	def build(cls, self):
 		return self
 
+@rich_eq
 @vtype("UTC-OFFSET")
 class UtcOffset(tzinfo):
 	pattern = re.compile(r"^[+-](?P<hours>\d{2})(?P<minutes>\d{2})(?P<seconds>\d{2})?$")
 	offset = timedelta(0)
+	
 	def utcoffset(self, d):
 		return self.offset
 	

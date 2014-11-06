@@ -279,11 +279,11 @@ class Component(object):
 
 	props = dict(
 		VCALENDAR = dict(
-			key = "PRODID VERSION",
+			req = "PRODID VERSION",
 			once = "CALSCALE METHOD",
 			),
 		VEVENT = dict(
-			key5545 = "DTSTAMP UID",
+			req5545 = "DTSTAMP UID",
 			once = "DTSTART"
 				" CLASS CREATED DESCRIPTION GEO"
 				" LAST-MODIFIED LOCATION ORGANIZER PRIORITY"
@@ -296,7 +296,7 @@ class Component(object):
 				" RESOURCES RDATE",
 			),
 		VTODO = dict(
-			key5545 = "DTSTAMP UID",
+			req5545 = "DTSTAMP UID",
 			once = "CLASS COMPLETED CREATED DESCRIPTION"
 				" DTSTART GEO LAST-MODIFIED LOCATION ORGANIZER"
 				" PERCENT-COMPLETE PRIORITY RECURRENCE-ID SEQUENCE STATUS"
@@ -308,7 +308,7 @@ class Component(object):
 				" RDATE",
 			),
 		VJOURNAL =dict(
-			key5545 = "DTSTAMP UID",
+			req5545 = "DTSTAMP UID",
 			once = "CLASS CREATED DTSTART"
 				" LAST-MODIFIED ORGANIZER RECURRENCE-ID SEQUENCE"
 				" STATUS SUMMARY URL",
@@ -318,7 +318,7 @@ class Component(object):
 				" REQUEST-STATUS",
 			),
 		VFREEBUSY = dict(
-			key5545 = "DTSTAMP UID",
+			req5545 = "DTSTAMP UID",
 			once = "CONTACT DTSTART DTEND DURATION"
 				" ORGANIZER URL",
 			many = "ATTENDEE COMMENT FREEBUSY REQUEST-STATUS",
@@ -395,8 +395,14 @@ class Component(object):
 	def validate(self):
 		info = self.props.get(self.name, {})
 		for prop in info.get("key","").split():
+			# system requires
 			assert len(self.list(prop))==1, "component %s requires property %s" % (self.name, prop)
-		for prop in info.get("key5545","").split():
+		for prop in info.get("req","").split():
+			# rfc2445 and rfc5545 requires
+			if len(self.list(prop))!=1:
+				logging.getLogger("pical").warn("component %s requires property %s" % (self.name, prop))
+		for prop in info.get("req5545","").split():
+			# rfc5545 requires
 			if len(self.list(prop))!=1:
 				logging.getLogger("pical").warn("component %s requires property %s in rfc5545" % (self.name, prop))
 		for prop in info.get("once","").split():

@@ -122,7 +122,7 @@ def parse(stream, encoding="UTF-8"):
 
 
 class Parameter(object):
-	paramQuote = "ALTREP DELEGATED-FROM DELEGATED-TO DIR MEMBER SENT-BY"
+	paramQuote = "ALTREP CN DELEGATED-FROM DELEGATED-TO DIR MEMBER SENT-BY"
 	
 	paramOptions = {
 		"CUTYPE": "INDIVIDUAL GROUP RESOURCE ROOM UNKNOWN X-",

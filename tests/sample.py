@@ -43,7 +43,9 @@ def test_caldav_7_8_2():
 	for f in glob.glob("%s/rfc4791_b_*.ics" % os.path.dirname(__file__)):
 		for cal in pical.parse(open(f,"rb")):
 			# <C:limit-recurrence-set start="20060103T000000Z" end="20060105T000000Z"/>
-			cal = cal.time_range(recur=[datetime(2006,1,3,tzinfo=pical.utc), datetime(2006,1,5,tzinfo=pical.utc)], component="VEVENT")
+			cal = cal.time_range(recur=[datetime(2006,1,3,tzinfo=pical.utc), datetime(2006,1,5,tzinfo=pical.utc)],
+				time_range=[datetime(2006,1,3,tzinfo=pical.utc), datetime(2006,1,5,tzinfo=pical.utc)],
+				component="VEVENT")
 			assert cal.name == "VCALENDAR"
 			f2 = f.replace("_b_","_7_8_2_")
 			
@@ -56,7 +58,9 @@ def test_caldav_7_8_3():
 	for f in glob.glob("%s/rfc4791_b_*.ics" % os.path.dirname(__file__)):
 		for cal in pical.parse(open(f,"rb")):
 			# <C:expand start="20060103T000000Z" end="20060105T000000Z"/>
-			cal = cal.time_range(expand=[datetime(2006,1,3,tzinfo=pical.utc), datetime(2006,1,5,tzinfo=pical.utc)], component="VEVENT")
+			cal = cal.time_range(expand=[datetime(2006,1,3,tzinfo=pical.utc), datetime(2006,1,5,tzinfo=pical.utc)],
+				time_range=[datetime(2006,1,3,tzinfo=pical.utc), datetime(2006,1,5,tzinfo=pical.utc)],
+				component="VEVENT")
 			cal = cal.clone(in_utc=True)
 			assert cal.name == "VCALENDAR"
 			f2 = f.replace("_b_","_7_8_3_")

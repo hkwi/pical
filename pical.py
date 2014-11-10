@@ -7,16 +7,20 @@ import logging
 digits = re.compile(r"^\d+$")
 control = re.compile(r"[\x00-\x1F\x7F]")
 
+try:
+	str_klass = (str,unicode)
+except:
+	str_klass = (str,)
+
 class uc(str):
 	# case insensitive string (upper cased)
 	def __hash__(self):
 		return self.upper().__hash__()
 	
 	def __eq__(self, other):
-		try:
+		if isinstance(other, str_klass):
 			return self.upper() == other.upper()
-		except:
-			return False
+		return False
 	
 	def __ne__(self, other):
 		return not self.__eq__(other)

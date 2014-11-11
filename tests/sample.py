@@ -132,7 +132,7 @@ def test_caldav_7_8_7():
 				elif comp.name == "VEVENT":
 					for name,value,params in comp.properties:
 						if (name=="ATTENDEE"
-								and pical.uc("mailto:lisa@example.com") == value
+								and "mailto:lisa@example.com" == value.lower()
 								and "NEEDS-ACTION" in dict(params).get("PARTSTAT",[])):
 							e.children.append(comp)
 							break
@@ -174,7 +174,7 @@ def test_caldav_7_8_9():
 					e.children.append(comp)
 				elif (comp.name == "VTODO"
 							and comp.get("COMPLETED") is None
-							and pical.uc("CANCELLED")!=comp.get("STATUS")):
+							and "CANCELLED"!=comp.get("STATUS","").upper()):
 						e.children.append(comp)
 			
 			if [c for c in e.children if c.name!="VTIMEZONE"]:

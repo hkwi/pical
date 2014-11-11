@@ -7,24 +7,6 @@ import logging
 digits = re.compile(r"^\d+$")
 control = re.compile(r"[\x00-\x1F\x7F]")
 
-try:
-	str_klass = (str,unicode)
-except:
-	str_klass = (str,)
-
-class uc(str):
-	# case insensitive string (upper cased)
-	def __hash__(self):
-		return self.upper().__hash__()
-	
-	def __eq__(self, other):
-		if isinstance(other, str_klass):
-			return self.upper() == other.upper()
-		return False
-	
-	def __ne__(self, other):
-		return not self.__eq__(other)
-
 def digits(sign, lower, upper):
 	def inner(value):
 		if ((sign and value[0] in "+-" and 0 < len(value)-1 <= len("%d" % upper))
@@ -81,7 +63,6 @@ def parse(stream, encoding="UTF-8"):
 			if not m:
 				logger.error("contentline param error L%d" % lineno)
 			pname,pval,nx = m.groups()
-			pname = uc(pname)
 			line = line[len(m.group(0)):]
 			vals=[pval]
 			while nx == ",":
@@ -92,24 +73,24 @@ def parse(stream, encoding="UTF-8"):
 				line = line[len(m.group(0)):]
 				vals.append(pval)
 			
-			params.append((uc(pname), Parameter.raw2native(pname, vals)))
-		name = uc(name)
+			params.append((pname, Parameter.raw2native(pname, vals)))
 		value = line
 		
-		if name == "BEGIN":
+		name_upper = name.upper()
+		if name_upper == "BEGIN":
 			tzdb = comp.tzdb
 			if tzdb is None:
 				tzdb = {}
 			
-			sub = Component.factory(uc(value), tzdb)
+			sub = Component.factory(value, tzdb)
 			if params:
 				logger.error("component takes no parameter L%d" % lineno)
 			
 			comp.children.append(sub)
 			stack.append(comp)
 			comp = sub
-		elif name == "END":
-			if comp.name == value:
+		elif name_upper == "END":
+			if comp.name.upper() == value.upper():
 				try:
 					comp.validate()
 				except Exception as e:
@@ -146,8 +127,7 @@ class Parameter(object):
 	}
 	
 	@classmethod
-	def raw2native(cls, name, values):
-		pname = uc(name)
+	def raw2native(cls, pname, values):
 		options = cls.paramOptions.get(pname,"").split()
 		
 		pvalues = []
@@ -155,7 +135,7 @@ class Parameter(object):
 			if options:
 				if value not in options and "X-" not in options:
 					logging.getLogger("pical").warn("param %s have non-standard value" % pname)
-			elif (value[0] != '"' or value[-1] != '"') and pname in cls.paramQuote.split():
+			elif (value[0] != '"' or value[-1] != '"') and pname.upper() in cls.paramQuote.split():
 				logging.getLogger("pical").warn("parameter %s was not DQUOTE" % pname)
 			
 			if value[0] == '"':
@@ -165,8 +145,7 @@ class Parameter(object):
 		return pvalues
 	
 	@classmethod
-	def native2raw(cls, name, values):
-		pname = uc(name)
+	def native2raw(cls, pname, values):
 		pvalues = []
 		for value in values:
 			if control.search(value) is not None:
@@ -182,7 +161,7 @@ class Parameter(object):
 				dquote = False # already encoded
 			elif '"' in value:
 				logging.getLogger("pical").error("parameter %s has DQUOTE" % pname) # python2 may hit
-			elif pname in cls.paramQuote.split():
+			elif pname.upper() in cls.paramQuote.split():
 				dquote = True
 			else:
 				for c in ";:,":
@@ -354,7 +333,7 @@ class Component(object):
 	)
 	
 	def __init__(self, name, tzdb):
-		self.name = uc(name)
+		self.name = name
 		self.tzdb = tzdb
 		self.children = []
 		self.properties = []
@@ -363,7 +342,7 @@ class Component(object):
 		if self.__class__ != other.__class__:
 			return False
 		
-		if self.name != other.name:
+		if self.name.upper() != other.name.upper():
 			return False
 		
 		if sorted(self.properties) != sorted(other.properties):
@@ -385,8 +364,9 @@ class Component(object):
 		return not self.__eq__(other)
 	
 	def __getitem__(self, name):
+		name_upper = name.upper()
 		for prop in self.properties:
-			if prop[0] == name:
+			if prop[0].upper() == name_upper:
 				return prop[1]
 		raise KeyError("property %s not found" % name)
 	
@@ -397,36 +377,50 @@ class Component(object):
 			return default
 	
 	def list(self, name):
-		return [prop[1] for prop in self.properties if prop[0] == name]
+		name_upper = name.upper()
+		return [prop[1] for prop in self.properties if prop[0].upper() == name_upper]
+	
+	def key_counts(self):
+		ret = {}
+		for prop in self.properties:
+			name_upper = prop[0].upper()
+			if name_upper in ret:
+				ret[name_upper] += 1
+			else:
+				ret[name_upper] = 1
+		return ret
 	
 	def validate(self):
+		key_counts = self.key_counts()
 		info = self.props.get(self.name, {})
 		for prop in info.get("key","").split():
 			# system requires
-			assert len(self.list(prop))==1, "component %s requires property %s" % (self.name, prop)
+			assert key_counts.get(prop,0)==1, "component %s requires property %s" % (self.name, prop)
 		for prop in info.get("req","").split():
 			# rfc2445 and rfc5545 requires
-			if len(self.list(prop))!=1:
+			if key_counts.get(prop,0)!=1:
 				logging.getLogger("pical").warn("component %s requires property %s" % (self.name, prop))
 		for prop in info.get("req5545","").split():
 			# rfc5545 requires
-			if len(self.list(prop))!=1:
+			if key_counts.get(prop,0)!=1:
 				logging.getLogger("pical").warn("component %s requires property %s in rfc5545" % (self.name, prop))
 		for prop in info.get("once","").split():
-			assert len(self.list(prop))<2, "component %s property %s must not occur more than once in %s" % (self.name, prop)
+			assert key_counts.get(prop,0)<2, "component %s property %s must not occur more than once in %s" % (self.name, prop)
 		
 		for name,value,params in self.properties:
-			if name in self.valueTypes:
+			name_upper = name.upper()
+			if name_upper in self.valueTypes:
 				accept = False
 				for constraint,props in info.items():
-					if name in props.split():
+					if name_upper in props.split():
 						accept = True
 				if not accept:
 					raise ValueError("property %s is not defined in component %s" % (name, self.name))
 		
-		if self.name == "VTIMEZONE":
+		self_name_upper = self.name.upper()
+		if self_name_upper == "VTIMEZONE":
 			assert len([c for c in self.children if c.name in "DAYLIGHT STANDARD".split()]) > 0, "VTIMEZONE must include at least one definition"
-		if self.name in "DAYLIGHT STANDARD".split():
+		if self_name_upper in "DAYLIGHT STANDARD".split():
 			if self.list("RRULE"):
 				assert self.get("DTSTART") and self.get("TZOFFSETFROM"), "DTSTART and TZOFFSETFROM must be used when generating the onset DATE-TIME values"
 			for rdates in self.list("RDATE"):
@@ -434,7 +428,7 @@ class Component(object):
 					if isinstance(rdate,datetime):
 						assert rdate.tzinfo is None, "RDATE must be specified as a date with local time value"
 		
-		if self.name in "VEVENT VTODO VJOURNAL DAYLIGHT STANDARD".split():
+		if self_name_upper in "VEVENT VTODO VJOURNAL DAYLIGHT STANDARD".split():
 			for name in ("RRULE","EXRULE"):
 				recurrs = self.list(name)
 				if len(recurrs) > 1:
@@ -442,22 +436,22 @@ class Component(object):
 				for recur in recurrs:
 					assert recur.get("FREQ"), "FREQ part is required in property %s" % name
 		
-		if self.name == "VEVENT":
+		if self_name_upper == "VEVENT":
 			if self.get("DTEND") and self.get("DURATION"):
 				raise ValueError("either DTEND or DURATION may appear")
-		elif self.name == "VTODO":
+		elif self_name_upper == "VTODO":
 			if self.get("DUE") and self.get("DURATION"):
 				raise ValueError("either DUE or DURATION may appear")
-		elif self.name == "VALARM":
+		elif self_name_upper == "VALARM":
 			duration = self.get("DURATION")
 			repeat = self.get("REPEAT")
 			if (duration is None and repeat is not None) or (duration is not None and repeat is None):
 				raise ValueError("both DURATION and REPEAT must occur")
 		
-		if self.name == "VEVENT":
+		if self_name_upper == "VEVENT":
 			dtstart_list = self.list("DTSTART")
-			if self.get("METHOD") is None:
-				assert len(dtstart_list)==1, "DTSTART is REQUIRED"
+			if len(dtstart_list)==1:
+				assert self.get("METHOD") is None, "DTSTART is REQUIRED if METHOD is not present"
 			assert len(dtstart_list) < 2, "DTSTART must not occur more than once"
 			dtstart = dtstart_list[0]
 			if isinstance(dtstart, date) and not isinstance(dtstart, datetime):
@@ -467,32 +461,38 @@ class Component(object):
 				dur = self.get("DURATION")
 				if dur:
 					assert dur.seconds == 0, "DATE DTSTART may have only dur-day or dur-week DURATION"
-		elif self.name == "VTIMEZONE":
+		elif self_name_upper == "VTIMEZONE":
 			self.tzdb[self["TZID"]] = self
-		elif self.name in ("DAYLIGHT", "STANDARD"):
+		elif self_name_upper in ("DAYLIGHT", "STANDARD"):
 			assert self["DTSTART"].tzinfo is None, "DTSTART in %s is local DATE-TIME value" % self.name
 			for rdate in self.list("RDATE"):
 				for r in rdate:
 					if isinstance(r, Period):
 						r = r[0]
 					assert isinstance(r, datetime) and r.tzinfo is None, "RDATE in %s is local date with local time" % self.name
-		elif self.name == "VALARM":
+		elif self_name_upper == "VALARM":
 			action = self.get("ACTION")
 			if action=="AUDIO":
-				assert len(self.list("ATTACH")) < 2, "AUDIO VALARM may include one ATTACH property"
+				assert key_counts.get("ATTACH",0) < 2, "AUDIO VALARM may include one ATTACH property"
 			elif action=="DISPLAY":
-				assert len(self.list("DESCRIPTION")), "DISPLAY VALARM must include DESCRIPTION"
+				assert key_counts.get("DESCRIPTION",0) > 0, "DISPLAY VALARM must include DESCRIPTION"
 			elif action=="EMAIL":
-				assert len(self.list("DESCRIPTION")), "EMAIL VALARM must include DESCRIPTION"
-				assert len(self.list("SUMMARY")), "EMAIL VALARM must include SUMMARY"
-				assert len(self.list("ATTENDEE"))>0, "EMAIL VALARM must include ATTENDEE"
-		elif self.name == "VCALENDAR":
-			for comp in self.children:
-				recurid = comp.get("RECURRENCE-ID")
-				if recurid is None:
-					continue
-				for c in self.children:
-					if len(c.list("RECURRENCE-ID"))==0 and c.name==comp.name and c["UID"]==comp["UID"]:
+				assert key_counts.get("DESCRIPTION",0) > 0, "EMAIL VALARM must include DESCRIPTION"
+				assert key_counts.get("SUMMARY",0) > 0, "EMAIL VALARM must include SUMMARY"
+				assert key_counts.get("ATTENDEE",0) > 0, "EMAIL VALARM must include ATTENDEE"
+		elif self_name_upper == "VCALENDAR":
+			masters = []
+			slaves = []
+			for c in self.children:
+				if c.get("RECURRENCE-ID") is None:
+					masters.append(c)
+				else:
+					slaves.append(c)
+			
+			for comp in slaves:
+				comp_name_upper = comp.name.upper()
+				for c in masters:
+					if c.name.upper()==comp_name_upper and c["UID"]==comp["UID"]:
 						assert type(c["DTSTART"])==type(recurid), "RECURRENCE-ID type must be same with reference DTSTART type"
 						break
 	
@@ -528,22 +528,25 @@ class Component(object):
 		if self.name == " root":
 			logging.getLogger("pical").error("no component to add to")
 		
-		pdic = dict(params)
-		tzinfo = self.pickTzinfo(pdic.get("TZID",[None])[0])
-		acceptTypes = self.valueTypes.get(name,"TEXT").split()
+		name_upper = name.upper()
+		pdic = dict(params) # NOTE: value is list
+		tzinfo = self.pickTzinfo(pdic.get("TZID", [None])[0])
+		acceptTypes = self.valueTypes.get(name_upper, "TEXT").split()
 		selectedType = pdic.get("VALUE", acceptTypes)[0]
 		if selectedType not in acceptTypes:
 			logging.getLogger("pical").warn("%s not a standard VALUE parameter value" % selectedType)
-			selectedType = Text
+			selectedType = "TEXT"
+		
 		typedValue = None
+		delim = self.valueDelimiter.get(name_upper)
 		for stype in [selectedType]+acceptTypes:
 			vtype = _vtype.get(stype)
-			delim = self.valueDelimiter.get(name)
 			try:
 				if delim:
 					typedValue = [vtype.parse(v, tzinfo) for v in value.split(delim)]
 				else:
 					typedValue = vtype.parse(value, tzinfo)
+				break
 			except Exception as e:
 				pass
 		
@@ -575,7 +578,7 @@ class Component(object):
 					vstr = repr(value)
 				return vstr
 			
-			delim = self.valueDelimiter.get(name)
+			delim = self.valueDelimiter.get(name.upper())
 			if delim:
 				vstr = delim.join([build_value(v) for v in value])
 			else:
@@ -591,15 +594,15 @@ class Component(object):
 		# component is mutable, properties are immutable
 		exp = Component.factory(self.name, self.tzdb)
 		if in_utc:
-			exp.children = [c.clone(in_utc=in_utc) for c in self.children if c.name!="VTIMEZONE"]
+			exp.children = [c.clone(in_utc=in_utc) for c in self.children if c.name.upper()!="VTIMEZONE"]
 			for name,value,params in self.properties:
 				if isinstance(value, (datetime,time)) and value.tzinfo:
 					value = value.astimezone(utc)
 					vparams = []
-					for name,values in params:
-						if name == "TZID":
+					for pname,values in params:
+						if pname.upper() == "TZID":
 							continue
-						vparams.append((name,values))
+						vparams.append((pname,values))
 					params = vparams
 				exp.properties.append((name, value, params))
 		else:
@@ -609,9 +612,10 @@ class Component(object):
 	
 	@classmethod
 	def factory(cls, name, tzdb):
-		if name == "VCALENDAR":
+		name_upper = name.upper()
+		if name_upper == "VCALENDAR":
 			self = Calendar(name, tzdb)
-		elif name == "VTIMEZONE":
+		elif name_upper == "VTIMEZONE":
 			self = Timezone(name, tzdb)
 		else:
 			self = cls(name, tzdb)
@@ -755,11 +759,11 @@ class Overlap(object):
 		dtcmp = self.dtcmp
 		
 		for name,value,params in obj.properties:
-			if name!="TRIGGER":
+			if name.upper()!="TRIGGER":
 				continue
 			
 			if isinstance(value, timedelta):
-				rel = dict(params).get("RELATED",["START"])[0]
+				rel = dict(params).get("RELATED",["START"])[0].upper()
 				if rel == "START":
 					trigger_time = dtstart + value
 				elif rel == "END":
@@ -801,11 +805,11 @@ class Calendar(Component):
 		dtcmp = vdatetime_cmp(floating_tz)
 		exp = self.clone()
 		for c in exp.children:
-			if c.name == "VFREEBUSY" and fb_range:
+			if c.name.upper() == "VFREEBUSY" and fb_range:
 				start,end = fb_range
 				properties = []
 				for name,value,params in c.properties:
-					if name == "FREEBUSY":
+					if name.upper() == "FREEBUSY":
 						for fb in value:
 							fb_hit = True
 							if start:
@@ -855,9 +859,15 @@ class Calendar(Component):
 					assert isinstance(dt,datetime) and dt.tzinfo, "start, end must be a datetime in UTC"
 		
 		def expanded(dtstart,dtend,base,upon):
+			comp_name_upper = None
+			if base:
+				comp_name_upper = base.name.upper()
+			elif upon:
+				comp_name_upper = upon.name.upper()
+			
 			def value_param(name, value, params):
 				vname = None
-				tnames = self.valueTypes[name].split()
+				tnames = self.valueTypes[name.upper()].split()
 				if "TEXT" not in tnames:
 					klass = vtype_resolve(value)
 					
@@ -865,14 +875,14 @@ class Calendar(Component):
 					for idx,tname in enumerate(tnames):
 						if klass == _vtype[tname]:
 							resolved = True
-							if idx:
+							if idx: # non-default case
 								vname = tname
 					if not resolved:
 						for k,v in _vtype.items():
 							if v == klass:
 								vname = k
 								logging.getLogger("pical").error("property %s is using irregular value type %s" % (name,vname))
-				params = [param for param in params if param[0]!="VALUE"]
+				params = [param for param in params if param[0].upper()!="VALUE"]
 				if vname:
 					params.append(("VALUE",[vname]))
 				return params
@@ -903,7 +913,7 @@ class Calendar(Component):
 			if dtend:
 				if isinstance(dtend, timedelta):
 					override["DURATION"] = dtend
-				elif cname == "VTODO":
+				elif comp_name_upper == "VTODO":
 					override["DUE"] = dtend
 				else:
 					override["DTEND"] = dtend
@@ -919,10 +929,11 @@ class Calendar(Component):
 					b = list(b)
 					exclusives = [("DURATION","DTEND","DUE"),]
 					for name,value,params in a:
+						name_upper = name.upper()
 						replaced = False
 						exclusive = False
 						for ex in exclusives:
-							if not replaced and name in ex:
+							if not replaced and name_upper in ex:
 								exclusive = True
 								for prop in b:
 									if not replaced and prop[0] in ex:
@@ -932,7 +943,7 @@ class Calendar(Component):
 										break
 						if not exclusive:
 							for prop in b:
-								if not replaced and prop[0]==name:
+								if not replaced and prop[0].upper()==name_upper:
 									b.remove(prop)
 									replaced = True
 									props.append(prop)
@@ -972,7 +983,7 @@ class Calendar(Component):
 				alarm_hit = False
 				children = []
 				for c in obj.children:
-					if c.name != "VALARM":
+					if c.name.upper() != "VALARM":
 						children.append(c)
 						continue
 					if Overlap(alarm_range, floating_tz)(dtstart,dtend,c):
@@ -1015,11 +1026,11 @@ class Calendar(Component):
 			if component and component != cname:
 				continue
 			
-			uids = set([c.get("UID") for c in self.children if c.name==cname])
+			uids = set([c.get("UID") for c in self.children if c.name.upper()==cname])
 			
 			if open_end:
 				for base in self.children:
-					if cname != base.name:
+					if cname != base.name.upper():
 						continue
 					ulim_rrule = sorted([sorted(recurr.items()) for recurr in base.list("RRULE")
 						if recurr.get("UNTIL") is None and recurr.get("COUNT") is None])
@@ -1037,13 +1048,13 @@ class Calendar(Component):
 						
 						limited = []
 						for upon in self.children:
-							if upon.get("RECURRENCE-ID") is None or cname!=upon.name or upon["UID"]!=uid:
+							if upon.get("RECURRENCE-ID") is None or cname!=upon.name.upper() or upon["UID"]!=uid:
 								continue
 							
 							# RANGE THISANDFUTURE will be always included
 							future = False
 							for name,value,params in rmod.properties:
-								if name == "RECURRENCE-ID" and dict(params).get("RANGE")=="THISANDFUTURE":
+								if name.upper() == "RECURRENCE-ID" and dict(params).get("RANGE")=="THISANDFUTURE":
 									if upon not in found:
 										found.append(upon)
 									future = True
@@ -1098,7 +1109,7 @@ class Calendar(Component):
 							found.append(upon)
 		
 		cal = Calendar(self.name, self.tzdb)
-		cal.children = [c for c in self.children if c.name=="VTIMEZONE"]
+		cal.children = [c for c in self.children if c.name.upper()=="VTIMEZONE"]
 		cal.children += found
 		cal.properties += self.properties
 		return cal
@@ -1107,7 +1118,7 @@ class Calendar(Component):
 		# yields (onset_dtstart, duration_or_dtend?, generator_component, modifier_component?)
 		uids = set()
 		for c in self.children:
-			if c.name != component_name:
+			if c.name.upper() != component_name.upper():
 				continue
 			uids.add(c["UID"])
 		
@@ -1123,8 +1134,8 @@ class Calendar(Component):
 		rbases = []
 		rmods = []
 		for c in self.children:
-			if c.name == component_name and c["UID"]==uid:
-				if len(c.list("RECURRENCE-ID"))==0:
+			if c.name.upper() == component_name.upper() and c["UID"]==uid:
+				if c.get("RECURRENCE-ID") is None:
 					rbases.append(c)
 				else:
 					rmods.append(c)
@@ -1196,8 +1207,8 @@ class Calendar(Component):
 			def lookup_modifier(dttest):
 				for rmod in rmods:
 					for name,value,params in rmod.properties:
-						if name == "RECURRENCE-ID":
-							r = dict(params).get("RANGE",[None])[0]
+						if name.upper() == "RECURRENCE-ID":
+							r = dict(params).get("RANGE",[""])[0].upper()
 							if r=="THISANDFUTURE":
 								if dttest >= value:
 									return rmod
@@ -1214,7 +1225,7 @@ class Calendar(Component):
 	def freebusy_merge(self, comp):
 		fb = None
 		for c in self.children:
-			if c.name == "VFREEBUSY":
+			if c.name.upper() == "VFREEBUSY":
 				fb = c
 				break
 		
@@ -1222,12 +1233,13 @@ class Calendar(Component):
 			fb = Component.factory("VFREEBUSY", self.tzdb)
 			self.children.append(fb)
 		
-		if comp.name == "VCALENDAR":
+		comp_name_upper = comp.name.upper()
+		if comp_name_upper == "VCALENDAR":
 			for c in comp.children:
 				self.freebusy_merge(c)
-		elif comp.name == "VEVENT":
-			transp = comp.get("TRANSP", "OPAQUE")
-			status = comp.get("STATUS", "CONFIRMED")
+		elif comp_name_upper == "VEVENT":
+			transp = comp.get("TRANSP", "OPAQUE").upper()
+			status = comp.get("STATUS", "CONFIRMED").upper()
 			fbtype = None
 			if transp == "OPAQUE":
 				if status == "CONFIRMED":
@@ -1252,9 +1264,9 @@ class Calendar(Component):
 				if fbtype != None:
 					params.append(("FBTYPE",[fbtype]))
 				fb.properties.append(("FREEBUSY", [Period((start, end))], params))
-		elif comp.name == "VFREEBUSY":
+		elif comp_name_upper == "VFREEBUSY":
 			for name,value,params in comp.properties:
-				if name=="FREEBUSY" and dict(params).get("FBTYPE","BUSY") != "FREE":
+				if name.upper()=="FREEBUSY" and dict(params).get("FBTYPE","BUSY") != "FREE":
 					fb.properties.append((name,value,params))
 
 class Timezone(tzinfo, Component):
@@ -1267,7 +1279,7 @@ class Timezone(tzinfo, Component):
 	
 	def dst(self, dt):
 		comp = self.scan(dt)
-		if comp and comp.name == "DAYLIGHT":
+		if comp and comp.name.upper() == "DAYLIGHT":
 			return self.utcoffset()
 		else:
 			return timedelta(0)
@@ -1284,7 +1296,7 @@ class Timezone(tzinfo, Component):
 			naive_mode = True
 		
 		for c in self.children:
-			if c.name not in ("DAYLIGHT", "STANDARD"):
+			if c.name.upper() not in ("DAYLIGHT", "STANDARD"):
 				continue
 			
 			dtstart = c["DTSTART"]
@@ -1329,7 +1341,7 @@ class Timezone(tzinfo, Component):
 _vtype = {}
 def vtype(name):
 	def register(klass):
-		_vtype[uc(name)] = klass
+		_vtype[name] = klass
 		return klass
 	return register
 
@@ -1380,7 +1392,7 @@ class Binary(bytes):
 class Boolean(object):
 	@classmethod
 	def parse(cls, value, tzinfo):
-		v = uc(value)
+		v = value.upper()
 		if v == "TRUE":
 			return True
 		elif v == "FALSE":
@@ -1415,7 +1427,7 @@ class Date(date):
 		m = cls.pattern.match(value)
 		if not m:
 			raise TypeError("DATE value format error")
-		year,month,mday = list(map(int, m.groups()))
+		year,month,mday = tuple(map(int, m.groups()))
 		self = date.__new__(cls, year, month, mday)
 		return self
 	
@@ -1558,7 +1570,7 @@ class Period(tuple):
 class Recur(object):
 	freq = ("SECONDLY", "MINUTELY", "HOURLY", "DAILY", "WEEKLY", "MONTHLY", "YEARLY")
 	weekday = "MO TU WE TH FR SA SU".split()
-	ranges = dict(
+	ranges = dict( # (TEST_NEGATIVE,LOWER,UPPER)
 		BYSECOND = (False,0,59),
 		BYMINUTE = (False,0,59),
 		BYHOUR = (False,0,23),
@@ -1573,10 +1585,11 @@ class Recur(object):
 		return tuple(self._items)
 	
 	def __getitem__(self, key):
+		key_upper = key.upper()
 		for item in self._items:
-			if item[0] == key:
+			if item[0].upper() == key_upper:
 				return item[1]
-		raise KeyError("Parameter %s not found" % key)
+		raise KeyError("parameter %s not found" % key)
 	
 	def get(self, key, default=None):
 		try:
@@ -1588,28 +1601,28 @@ class Recur(object):
 	def parse(cls, value, tzinfo):
 		items = []
 		for k,v in [kv.split("=") for kv in value.split(";")]:
-			k = uc(k)
-			if k == "FREQ":
-				if v not in cls.freq:
+			k_upper = k.upper()
+			if k_upper == "FREQ":
+				if v.upper() not in cls.freq:
 					raise ValueError("FREQ parameter value error")
 				items.append((k,v))
-			elif k in ("COUNT","INTERVAL"):
+			elif k_upper in ("COUNT","INTERVAL"):
 				items.append((k,int(v)))
-			elif k in cls.ranges:
-				items.append((k,list(map(digits(*cls.ranges[k]), v.split(",")))))
-			elif k == "UNTIL":
+			elif k_upper in cls.ranges:
+				items.append((k,list(map(digits(*cls.ranges[k_upper]), v.split(",")))))
+			elif k_upper == "UNTIL":
 				try:
 					items.append((k,Date.parse(v, tzinfo)))
 				except:
 					items.append((k,DateTime.parse(v, tzinfo)))
-			elif k == "BYDAY":
+			elif k_upper == "BYDAY":
 				values = v.split(",")
 				list(map(digits(True,1,366), [v[:-2] for v in values if len(v)!=2]))
 				for v in values:
 					if v[-2:] not in cls.weekday:
 						raise ValueError("BYDAY parameter error")
 				items.append((k,values))
-			elif k == "WKST":
+			elif k_upper == "WKST":
 				if v not in cls.weekday:
 					raise ValueError("WKST parameter error")
 				items.append((k,v))
@@ -1624,19 +1637,20 @@ class Recur(object):
 		parts = []
 		for k,v in self._items:
 			part = [k]
-			if k=="FREQ":
+			k_upper = k.upper()
+			if k_upper=="FREQ":
 				part.append(v)
-			elif k in ("COUNT","INTERVAL"):
+			elif k_upper in ("COUNT","INTERVAL"):
 				part.append("%d" % v)
-			elif k in cls.ranges:
+			elif k_upper in cls.ranges:
 				part.append(",".join(["%d" % s for s in v]))
-			elif k == "UNTIL":
+			elif k_upper == "UNTIL":
 				if isinstance(v,datetime):
 					v = DateTime.build(v)
 				else:
 					v = Date.build(v)
 				part.append(v)
-			elif k in ("BYDAY", "WKST"):
+			elif k_upper in ("BYDAY", "WKST"):
 				part.append(",".join(v))
 			else:
 				part.append(v)
@@ -1648,6 +1662,8 @@ class Recur(object):
 			floating_tz = utc
 		weeks = ("MO","TU","WE","TH","FR","SA","SU")
 		context = dict(setno=0)
+		
+		freq = self.get("FREQ", "").upper()
 		
 		def until(src, until):
 			for value in src:
@@ -1707,7 +1723,6 @@ class Recur(object):
 					values.append(value)
 		
 		def bysecond(src, part):
-			freq = uc(self.get("FREQ", ""))
 			if freq == "SECONDLY":
 				while True:
 					value = next(src)
@@ -1729,9 +1744,8 @@ class Recur(object):
 				for value in src:
 					for p in part:
 						yield value.replace(second=p)
-	
+		
 		def byminute(src, part):
-			freq = uc(self.get("FREQ", ""))
 			if freq in ("SECONDLY", "MINUTELY"):
 				for value in src:
 					if value.minute in part:
@@ -1746,9 +1760,8 @@ class Recur(object):
 				for value in src:
 					for p in part:
 						yield value.replace(minute=p)
-	
+		
 		def byhour(src, part):
-			freq = uc(self.get("FREQ", ""))
 			if freq in ("SECONDLY","MINUTELY","HOURLY"):
 				for value in src:
 					if value.hour in part:
@@ -1774,15 +1787,20 @@ class Recur(object):
 					start = value.replace(day=1)
 					end = (start + timedelta(40)).replace(day=1)
 					limit = lambda x: x.month==value.month
-			
+				
 				base = (end - start).days // 7
 				xtra = (end.weekday() - start.weekday()) % 7
 				if weekday in [(start.weekday()+o) % 7 for o in range(xtra)]:
 					base += 1
 				
+				values = []
 				cur = start + timedelta(days=(weekday - start.weekday())%7)
-				scans = [cur + timedelta(weeks=1)*N for N in range(base)]
-				return [s for s in scans if limit(s)]
+				for N in range(base):
+					value = cur + timedelta(weeks=N)
+					if limit(value):
+						values.append(value)
+				
+				return values
 		
 			def p_expand(value, p, in_year):
 				scan = weekday_expand(value, weeks.index(p[-2:]), in_year)
@@ -1812,9 +1830,8 @@ class Recur(object):
 			
 				return False
 			
-			freq = uc(self.get("FREQ", ""))
 			if freq == "WEEKLY":
-				wkst = weeks.index(self.get("WKST", "MO"))
+				wkst = weeks.index(self.get("WKST", "MO").upper())
 				part = sorted([(weeks.index(p)-wkst)%7 for p in part if len(p)==2])
 				
 				value = next(src)
@@ -1882,7 +1899,6 @@ class Recur(object):
 					days = [p for p in days if p>0]+[ceil+p for p in part if p<0]
 				return sorted(set([p for p in days if p>0])) # ignores -31 in some month
 		
-			freq = uc(self.get("FREQ", ""))
 			if freq == "WEEKLY":
 				pass # invalid by specification
 			elif freq in ("MONTHLY", "YEARLY"):
@@ -1908,12 +1924,11 @@ class Recur(object):
 					ceil = (end - head).days + 1
 					ydays = [p for p in ydays if p>0]+[ceil+p for p in part if p<0]
 				return sorted(set([p for p in ydays if p>0])) # ignores -31 in some month
-		
+			
 			def tm_resolve(value):
 				head = value.replace(month=1, day=1)
 				return [head+timedelta(p) for p in resolve(value)]
-		
-			freq = uc(self.get("FREQ", ""))
+			
 			if freq in ("DAILY", "WEEKLY", "MONTHLY"):
 				pass
 			elif freq == "YEARLY":
@@ -1930,15 +1945,14 @@ class Recur(object):
 				for value in src:
 					if value.timetuple().yday in resolve(value):
 						yield value
-	
+		
 		def byweekno(src, part):
 			weeks = weeks
-			freq = uc(self.get("FREQ", ""))
 			if freq != "YEARLY":
 				return
-			wkst = weeks.index(self.get("WKST", "MO"))
+			wkst = weeks.index(self.get("WKST", "MO").upper())
 			part = sorted(part, key=lambda x:(x-wkst)%7)
-		
+			
 			def expand(value):
 				wday = value.weekday()
 				ystart = value.replace(month=1, day=1)
@@ -1979,7 +1993,6 @@ class Recur(object):
 					yield v
 	
 		def bymonth(src, part):
-			freq = uc(self.get("FREQ", ""))
 			if freq == "YEAR":
 				part = sorted([p for p in part if 0<p<13])
 				def expand(value):
@@ -1997,7 +2010,7 @@ class Recur(object):
 				for value in src:
 					if value.month in part:
 						yield value
-	
+		
 		def repeat():
 			if not dtstart:
 				return
@@ -2013,7 +2026,6 @@ class Recur(object):
 				WEEKLY = timedelta(weeks=1),
 			)
 			interval = self.get("INTERVAL", 1)
-			freq = uc(self.get("FREQ", ""))
 			while freq:
 				if freq in const_delta:
 					cur = cur + const_delta[freq] * interval
@@ -2036,15 +2048,11 @@ class Recur(object):
 			if value:
 				src = locals()[part.lower()](src, value)
 		
-		def guard(src):
-			while True:
-				try:
-					yield next(src)
-				except OverflowError as e:
-					break
-		
-		for value in guard(src):
-			yield value
+		try:
+			for value in src:
+				yield value
+		except OverflowError as e:
+			pass
 
 @vtype("TEXT")
 class Text(str):
@@ -2236,4 +2244,3 @@ class Merger(object):
 				cur[0][0] = next(g)
 			except StopIteration:
 				cur = cur[1:]
-

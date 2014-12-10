@@ -7,6 +7,11 @@ import logging
 digits = re.compile(r"^\d+$")
 control = re.compile(r"[\x00-\x1F\x7F]")
 
+try:
+	str_cls = unicode
+except:
+	str_cls = str
+
 def digits(sign, lower, upper):
 	def inner(value):
 		if ((sign and value[0] in "+-" and 0 < len(value)-1 <= len("%d" % upper))
@@ -181,7 +186,7 @@ class Parameter(object):
 				if isinstance(value.tzinfo, Timezone):
 					tzid = [value.tzinfo["TZID"]]
 				else:
-					base = str(value.tzinfo)
+					base = str_cls(value.tzinfo)
 					tzid = ["/"+base, base]
 				
 				ptzid = dict(params).get("TZID")
@@ -565,7 +570,7 @@ class Component(object):
 				if isinstance(value.tzinfo, Timezone):
 					params.append(("TZID", [value.tzinfo["TZID"]]))
 				else:
-					params.append(("TZID", ["/"+str(value)]))
+					params.append(("TZID", ["/"+str_cls(value)]))
 			return params
 		
 		for name,value,params in self.properties:
@@ -1350,7 +1355,7 @@ def vtype_resolve(value):
 		return Boolean
 	elif isinstance(value, tuple(_vtype.values())):
 		return value.__class__
-	elif isinstance(value,str):
+	elif isinstance(value,str_cls):
 		return Text
 	elif isinstance(value,(bytes,bytearray)):
 		return Binary
@@ -1408,7 +1413,7 @@ class Boolean(object):
 			return "FALSE"
 
 @vtype("CAL-ADDRESS")
-class CalAddress(str):
+class CalAddress(str_cls):
 	@classmethod
 	def parse(cls, value, tzinfo):
 		self = cls(value)
@@ -2055,7 +2060,7 @@ class Recur(object):
 			pass
 
 @vtype("TEXT")
-class Text(str):
+class Text(str_cls):
 	pattern = re.compile(r"(\\[\\;,Nn])")
 	build_pattern = re.compile(r"([\\;,\n])")
 	escaping = (("\\\\","\\"),("\\;",";"),("\\,",","),("\\N","\n"),("\\n","\n"))
@@ -2109,7 +2114,7 @@ class Time(time):
 		return "%02d%02d%02d" % arg
 
 @vtype("URI")
-class Uri(str):
+class Uri(str_cls):
 	@classmethod
 	def parse(cls, value, tzinfo):
 		self = cls(value)

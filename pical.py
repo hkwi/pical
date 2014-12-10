@@ -498,7 +498,7 @@ class Component(object):
 				comp_name_upper = comp.name.upper()
 				for c in masters:
 					if c.name.upper()==comp_name_upper and c["UID"]==comp["UID"]:
-						assert type(c["DTSTART"])==type(recurid), "RECURRENCE-ID type must be same with reference DTSTART type"
+						assert type(c["DTSTART"])==type(comp["RECURRENCE-ID"]), "RECURRENCE-ID type must be same with reference DTSTART type"
 						break
 	
 	def pickTzinfo(self, tzid):

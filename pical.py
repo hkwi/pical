@@ -455,8 +455,8 @@ class Component(object):
 		
 		if self_name_upper == "VEVENT":
 			dtstart_list = self.list("DTSTART")
-			if len(dtstart_list)==1:
-				assert self.get("METHOD") is None, "DTSTART is REQUIRED if METHOD is not present"
+			if self.get("METHOD") is None:
+				assert len(dtstart_list)==1, "DTSTART is REQUIRED if METHOD is not present"
 			assert len(dtstart_list) < 2, "DTSTART must not occur more than once"
 			dtstart = dtstart_list[0]
 			if isinstance(dtstart, date) and not isinstance(dtstart, datetime):

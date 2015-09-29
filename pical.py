@@ -410,7 +410,7 @@ class Component(object):
 			if key_counts.get(prop,0)!=1:
 				logging.getLogger("pical").warn("component %s requires property %s in rfc5545" % (self.name, prop))
 		for prop in info.get("once","").split():
-			assert key_counts.get(prop,0)<2, "component %s property %s must not occur more than once in %s" % (self.name, prop)
+			assert key_counts.get(prop,0)<2, "component %s property %s must not occur more than once" % (self.name, prop)
 		
 		for name,value,params in self.properties:
 			name_upper = name.upper()
@@ -421,6 +421,9 @@ class Component(object):
 						accept = True
 				if not accept:
 					raise ValueError("property %s is not defined in component %s" % (name, self.name))
+				
+				if self.valueTypes[name_upper].split()[0] == "DATE-TIME" and not isinstance(value, datetime):
+					assert params, "component %s property %s is not default value type" % (self.name, name)
 		
 		self_name_upper = self.name.upper()
 		if self_name_upper == "VTIMEZONE":

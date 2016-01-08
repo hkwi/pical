@@ -424,8 +424,13 @@ class Component(object):
 				if not accept:
 					raise ValueError("property %s is not defined in component %s" % (name, self.name))
 				
-				if self.valueTypes[name_upper].split()[0] == "DATE-TIME" and not isinstance(value, datetime):
-					assert params, "component %s property %s is not default value type" % (self.name, name)
+				if self.valueTypes[name_upper].split()[0] == "DATE-TIME":
+					if self.valueDelimiter.get(name_upper):
+						for v in value:
+							if not isinstance(v, datetime):
+								assert params, "component %s property %s has non-default type value" % (self.name, name)
+					elif not isinstance(value, datetime):
+						assert params, "component %s property %s is not default value type" % (self.name, name)
 		
 		self_name_upper = self.name.upper()
 		if self_name_upper == "VTIMEZONE":

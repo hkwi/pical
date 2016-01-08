@@ -88,6 +88,7 @@ def parse(stream, encoding="UTF-8"):
 				tzdb = {}
 			
 			sub = Component.factory(value, tzdb)
+			sub.lineno = lineno
 			if params:
 				logger.error("component takes no parameter L%d" % lineno)
 			
@@ -102,7 +103,7 @@ def parse(stream, encoding="UTF-8"):
 					logger.error("%s L%d" % (e,lineno))
 				comp = stack.pop()
 			else:
-				logger.error("END does not match with BEGIN L%d" % lineno)
+				logger.error("END does not match with BEGIN L%d - L%d" % (comp.lineno, lineno))
 		else:
 			try:
 				comp.parseProperty(name, value, params)
@@ -208,6 +209,7 @@ class Parameter(object):
 		return vparams
 	
 class Component(object):
+	lineno = None
 	valueTypes = {
 		"CALSCALE": "TEXT",
 		"METHOD": "TEXT",

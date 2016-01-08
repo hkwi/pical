@@ -463,14 +463,15 @@ class Component(object):
 			if self.get("METHOD") is None:
 				assert len(dtstart_list)==1, "DTSTART is REQUIRED if METHOD is not present"
 			assert len(dtstart_list) < 2, "DTSTART must not occur more than once"
-			dtstart = dtstart_list[0]
-			if isinstance(dtstart, date) and not isinstance(dtstart, datetime):
-				dtend = self.get("DTEND")
-				if dtend:
-					assert isinstance(dtend, date) and not isinstance(dtend, datetime), "DTEND must be DATE value also"
-				dur = self.get("DURATION")
-				if dur:
-					assert dur.seconds == 0, "DATE DTSTART may have only dur-day or dur-week DURATION"
+			if len(dtstart_list) > 0:
+				dtstart = dtstart_list[0]
+				if isinstance(dtstart, date) and not isinstance(dtstart, datetime):
+					dtend = self.get("DTEND")
+					if dtend:
+						assert isinstance(dtend, date) and not isinstance(dtend, datetime), "DTEND must be DATE value also"
+					dur = self.get("DURATION")
+					if dur:
+						assert dur.seconds == 0, "DATE DTSTART may have only dur-day or dur-week DURATION"
 		elif self_name_upper == "VTIMEZONE":
 			self.tzdb[self["TZID"]] = self
 		elif self_name_upper in ("DAYLIGHT", "STANDARD"):

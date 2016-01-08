@@ -2260,3 +2260,8 @@ class Merger(object):
 				cur[0][0] = next(g)
 			except StopIteration:
 				cur = cur[1:]
+
+if __name__=="__main__":
+	import sys
+	for f in sys.argv[1:]:
+		parse(open(f, encoding="utf8"))

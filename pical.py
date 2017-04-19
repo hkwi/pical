@@ -1296,7 +1296,7 @@ class Timezone(tzinfo, Component):
 	def dst(self, dt):
 		comp = self.scan(dt)
 		if comp and comp.name.upper() == "DAYLIGHT":
-			return self.utcoffset()
+			return self.utcoffset(dt)
 		else:
 			return timedelta(0)
 	

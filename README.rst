@@ -34,3 +34,8 @@ Time-range query example::
  for line in expcal.clone(in_utc=True).serialize():
  	print line
 
+
+References
+
+* https://msdn.microsoft.com/en-us/library/ee219935.aspx
+     ``X-WR-CALNAME``, ``X-WR-CALDESC`` would be useful
